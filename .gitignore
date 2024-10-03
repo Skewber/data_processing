@@ -1,3 +1,5 @@
 doxigen/
 testdata/
 source/__pycache__/
+notes.txt
+.vscode/

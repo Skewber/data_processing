@@ -14,7 +14,7 @@ class DataReduction():
         """! Set up of general information
 
         @param foldername_data (str): name of the folder with the raw data to
-        @param foldername_reduced (str, optional): (optional) name of the folder the reduced data should be stored. If it does not exist, this folder will be created. Defaults to "reduced_data".
+        @param foldername_reduced (str): optional, name of the folder the reduced data should be stored. If it does not exist, this folder will be created. Defaults to "reduced_data".
         """
         # set up for raw data path
         ## Path to the raw data
@@ -27,7 +27,7 @@ class DataReduction():
         self.reduced_path: Path = Path('.', foldername_reduced)
         self.reduced_path.mkdir(exist_ok=True)
         ## Collection of all images that are allready in the reduced folder
-        self.ifc_reduced = ImageFileCollection(self.reduced_path)
+        self.ifc_reduced: ImageFileCollection = ImageFileCollection(self.reduced_path)
 
         ## Defines the keywords in the header of the used fits files
         self.imagetypes: dict[str, str] = {'bias':'', 'dark':'', 'flat':'', 'light':''}
@@ -119,8 +119,8 @@ class DataReduction():
     def check_master(self, frametype: str, master: str='') -> bool:
         """!Checks if  a specific master frame exist
         
-        @param frametype (string) : specify which frametype should be checked. Valid are 'bias', 'dark', 'flat', 'light'
-        @param master (string) : optional, the filename of a masterframe. Check if the file exist
+        @param frametype (str) : specify which frametype should be checked. Valid are 'bias', 'dark', 'flat', 'light'
+        @param master (str) : optional, the filename of a masterframe. Check if the file exist
             
         @return (bool) : True if the file is available, False if not"""
         # no master filename is given
