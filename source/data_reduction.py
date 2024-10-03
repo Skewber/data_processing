@@ -1,7 +1,7 @@
 from pathlib import Path
 import shutil
 import numpy as np
-from ccdproc import ImageFileCollection, combine
+from ccdproc import ImageFileCollection, combine, subtract_bias
 from astropy.io import fits
 from astropy.nddata import CCDData
 from astropy.stats import mad_std
@@ -14,7 +14,7 @@ class DataReduction():
         """! Set up of general information
 
         @param foldername_data (str): name of the folder with the raw data to
-        @param foldername_reduced (str): optional, name of the folder the reduced data should be stored. If it does not exist, this folder will be created. Defaults to "reduced_data".
+        @param foldername_reduced (str): (optional) name of the folder the reduced data should be stored. If it does not exist, this folder will be created. Defaults to "reduced_data".
         """
         # set up for raw data path
         ## Path to the raw data
@@ -120,7 +120,7 @@ class DataReduction():
         """!Checks if  a specific master frame exist
         
         @param frametype (str) : specify which frametype should be checked. Valid are 'bias', 'dark', 'flat', 'light'
-        @param master (str) : optional, the filename of a masterframe. Check if the file exist
+        @param master (str) : (optional) the filename of a masterframe. Check if the file exist
             
         @return (bool) : True if the file is available, False if not"""
         # no master filename is given
@@ -185,3 +185,67 @@ class DataReduction():
                     self.master_frames['bias'] = CCDData(file[0].data, unit='adu')
 
         return self.master_frames['bias']
+    
+    def reduce_darks(self, force_new_master: bool=False, keep_files: bool=False, master_bias: str | CCDData=None) -> dict[float, CCDData]:
+        """!Calibrates the dark frames and stacks them to a master dark
+        
+        @param force_new_master (bool) : (optional) If True, an existing master will be ignored and overwritten. Otherwise the existing will be used.
+        @param keep_files (bool) : (optional) If True, all calibrated files will be kept. Default is 'False'
+        @param master_bias (str) : (optional) filename of a masterbias that should be used. Defaulte is 'None'
+
+        @return (dict) : dictionary with master darks. key=exposure time, value CCDData object
+        """
+        self.ifc_reduced.refresh()
+        # 1) check for existing
+        if not self.check_master("dark") or force_new_master:
+            # ensure that a master bias exists
+            if self.master_frames['bias'] == None:
+                self.reduce_bias()
+
+            dark_times: set[float] = set(h['exptime'] for h in self.ifc_raw.headers(imagetyp=self.imagetypes['dark']))
+
+            # 2) reduce the dark frames
+            for ccd, fname in self.ifc_raw.ccds(imagetyp=self.imagetypes['dark'], return_fname=True):
+                ccd = subtract_bias(ccd, self.master_frames['bias'])
+                ccd.write(self.reduced_path / fname, overwrite=True)
+
+            # 3) stack the frames and use dict for different exp times
+            self.ifc_reduced.refresh()
+            for exp_time in dark_times:
+                reduced_darks: list[str] = self.ifc_reduced.files_filtered(imagetyp=self.imagetypes['dark'], exptime=exp_time, include_path=True)
+
+                if force_new_master:
+                # remove existing master from the imagelist, since those should not be stacked
+                    reduced_darks = self.__rm_master(reduced_darks)
+
+                self.__combine(reduced_darks, frame='dark', exposure=str(int(exp_time)))
+            
+            # 4) clean up
+            # remove all single calibrate bias frames
+            reduced_darks: list[str] = self.ifc_reduced.files_filtered(imagetyp=self.imagetypes['dark'], include_path=True)
+            reduced_darks = self.__rm_master(reduced_darks)
+
+            if not keep_files:
+                [os.remove(Path('.', file)) for file in reduced_darks]
+
+        # in all other cases there is already a master dark that can be used
+        else:
+            print("There is already a master dark.")
+            master_darks = self.ifc_reduced.files_filtered(imagetyp=self.imagetypes['dark'], combined=True, include_path=True)
+
+            exptimes: list[float] = []
+            for dark in master_darks:
+                # iterate over the files and check for duplicates for the same exposure time
+                with fits.open(dark) as file:
+                    exp_time = int(file[0].header['exptime'])
+                    if exp_time in exptimes:
+                        raise RuntimeError(f"More than one master dark for the same exposure time are detected. Make sure that at most one file for each exposure time is available. The found files are {master_darks}")
+                    else:
+                        self.master_frames['dark'] = {exp_time:CCDData(file[0].data, unit='adu')}
+                        exptimes = list(self.master_frames['dark'].keys())
+
+        # create a dictionary for better access
+        self.ifc_reduced.refresh()
+        self.master_frames['dark'] = {ccd.header['exptime']: ccd for ccd in self.ifc_reduced.ccds(imagetyp=self.imagetypes['dark'], combined=True)}
+
+        return self.master_frames['dark']
