@@ -1,10 +1,11 @@
 from pathlib import Path
 import shutil
 import numpy as np
-from ccdproc import ImageFileCollection, combine, subtract_bias
+from ccdproc import ImageFileCollection, combine, subtract_bias, subtract_dark
 from astropy.io import fits
 from astropy.nddata import CCDData
 from astropy.stats import mad_std
+from astropy import units
 import os
 
 class DataReduction():
@@ -116,6 +117,26 @@ class DataReduction():
         filelist = [file for file in filelist if not file in combined]
         return filelist
     
+    def best_dark(self, target: float) -> CCDData:
+        """!Finds the best dark
+
+        @param target (float) : exposure time for which the best darkframe should be found
+        
+        @return bast_dark (CCDData) : A CCDData object of the best dark
+        """
+        if not self.master_frames['dark'] == None:
+            dark_exposures: list[float] = sorted(self.master_frames['dark'].keys())
+            best_idx: int = int(np.digitize(target, dark_exposures))
+            best_exposure: float
+            if best_idx == len(dark_exposures):
+                best_exposure = dark_exposures[-1]
+            else:
+                best_exposure = dark_exposures[best_idx]
+            best_dark: CCDData = self.master_frames['dark'][best_exposure]
+            return best_dark
+        else:
+            raise AttributeError("Expected dark frames to exist. Ensure that there exist at least one dark frame before running this function.")
+            
     def check_master(self, frametype: str, master: str='') -> bool:
         """!Checks if  a specific master frame exist
         
@@ -186,7 +207,7 @@ class DataReduction():
 
         return self.master_frames['bias']
     
-    def reduce_darks(self, force_new_master: bool=False, keep_files: bool=False, master_bias: str | CCDData=None) -> dict[float, CCDData]:
+    def reduce_darks(self, force_new_master: bool=False, keep_files: bool=False) -> dict[float, CCDData]:
         """!Calibrates the dark frames and stacks them to a master dark
         
         @param force_new_master (bool) : (optional) If True, an existing master will be ignored and overwritten. Otherwise the existing will be used.
@@ -249,3 +270,68 @@ class DataReduction():
         self.master_frames['dark'] = {ccd.header['exptime']: ccd for ccd in self.ifc_reduced.ccds(imagetyp=self.imagetypes['dark'], combined=True)}
 
         return self.master_frames['dark']
+
+    def reduce_flats(self, force_new_master: bool=False, keep_files: bool=False) -> dict[str, CCDData]:
+        """!Calibrates the flat frames and stacks them to a master flat
+        
+        @param force_new_master (bool) : (optional) If True, an existing master will be ignored and overwritten. Otherwise the existing will be used.
+        @param keep_files (bool) : (optional) If True, all calibrated files will be kept. Default is 'False'
+        @param master_bias (str) : (optional) filename of a masterbias that should be used. Defaulte is 'None'
+
+        @return (dict) : dictionary with master flats. key=filter, value CCDData object
+        """
+        # 1) check for existing
+        if not self.check_master('flat') or force_new_master:
+            # check necessary files
+            if self.master_frames['bias'] == None:
+                self.reduce_bias(force_new_master, keep_files)
+            if self.master_frames['dark'] == None:
+                self.reduce_darks(force_new_master, keep_files)
+        
+        # 2) calibrate the flat frames
+            for hdu, fname in self.ifc_raw.hdus(imagetyp=self.imagetypes['flat'], return_fname=True):
+                ccd = CCDData(hdu.data, meta=hdu.header, unit='adu')
+                ccd = subtract_bias(ccd, self.master_frames['bias'])
+                ccd = subtract_dark(ccd, self.best_dark(hdu.header['exptime']), exposure_time='exptime', exposure_unit=units.second, scale=True)
+                ccd.write(self.reduced_path / fname, overwrite=True)
+                
+        # 3) stack them
+            self.ifc_reduced.refresh()
+
+            # creating a set of all filters to distinguish the flats
+            flat_filters: set[str] = set(h['filter'] for h in self.ifc_reduced.headers(imagetyp=self.imagetypes['flat']))
+
+            for filt in flat_filters:
+                reduced_flats: list[str] = self.ifc_reduced.files_filtered(imagetyp=self.imagetypes['flat'], filter=filt, include_path=True)
+
+                # remove existing master from the imagelist, since those should not be stacked
+                if force_new_master:
+                    reduced_flats = self.__rm_master(reduced_flats)
+                self.__combine(reduced_flats, frame='flat', filt=filt)
+
+        # 4) clean up
+            # remove not stacked files if not needed
+            reduced_flats: list[str] = self.ifc_reduced.files_filtered(imagetyp=self.imagetypes['flat'], include_path=True)
+            reduced_flats = self.__rm_master(reduced_flats)
+            if not keep_files:
+                [os.remove(file) for file in reduced_flats]
+        
+        # in all other cases there are already master flats
+        else:
+            print("There is already a master flat.")
+            master_flats = self.ifc_reduced.files_filtered(iamgetyp=self.imagetypes['flat'], combined=True, include_path=True)
+            filters: list[str] = []
+            for flat in master_flats:
+                # iterate over filters and check for duplicates
+                with fits.open(flat) as file:
+                    used_filter = file[0].header['filter']
+                    if used_filter in filters:
+                        raise RuntimeError(f"More than one master flat for the same filter are detected. Make shure that at most one file for each filter is available. The found files are {master_flats}")
+                    else:
+                        self.master_frames['flat'] = {used_filter:CCDData(file[0].data, unit='adu')}
+        
+        # create dictionary for better access
+        self.ifc_reduced.refresh()
+        self.master_frames['flat'] = {ccd.header['filter']: ccd for ccd in self.ifc_reduced.ccds(imagetyp=self.imagetypes['flat'], combined=True)}
+
+        return self.master_frames['flat']
