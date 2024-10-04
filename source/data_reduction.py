@@ -1,12 +1,21 @@
 from pathlib import Path
 import shutil
 import numpy as np
-from ccdproc import ImageFileCollection, combine, subtract_bias, subtract_dark
+from scipy.ndimage import median_filter, shift
+from ccdproc import ImageFileCollection, combine, subtract_bias, subtract_dark, flat_correct, wcs_project
 from astropy.io import fits
 from astropy.nddata import CCDData
 from astropy.stats import mad_std
 from astropy import units
+from astropy.wcs import WCS
+import astroalign as aa
 import os
+from warnings import filterwarnings
+import matplotlib.pyplot as plt
+from matplotlib.colors import LogNorm
+
+filterwarnings(action="ignore", module="ccdproc")
+filterwarnings(action="ignore", module="astropy")
 
 class DataReduction():
     """! Basic class for Data Reduction. For this class to work properly the used .fits files need a the following keywords in the header: 'EXPTIME', 'FILTER', 'OBJECT'. Optionally it can also contain wcs informations if an alignment of those is desired. If not provided the alignemt can also be done by matching stars in the image.
@@ -117,6 +126,167 @@ class DataReduction():
         filelist = [file for file in filelist if not file in combined]
         return filelist
     
+    @staticmethod
+    def align_astroalign(to_combine: list[str]) -> list[CCDData]:
+        """!
+        Aligns the given images using the astroalign library
+
+        @param to_combine (list) : list of file names
+
+        @return (list) : list of aligned CCDData objects
+        """
+        # the first image is the target
+        # all others will be aligned to this one
+        with fits.open(to_combine[0]) as file:
+            target = file[0].data.astype(float)
+
+        def align_img(img, target):
+            with fits.open(img) as file:
+                source = file[0].data.astype(float)
+            registered_img = CCDData(aa.register(source=source, target=target,
+                                                max_control_points=50, detection_sigma=5)[0],
+                                                unit='adu')
+            print(f"{img} aligned successfully")
+            return registered_img
+
+        aligned: list[CCDData] = [align_img(img, target) for img in to_combine]
+
+        return aligned
+
+    @staticmethod
+    def align_simple(to_combine: list[str]) -> list[CCDData]:
+        """!
+        Aligns the given images using an input from the user to detect a star that will be aligned. Therefore no rotational alignment is possible.
+
+        @param to_combine (list[str]) : list of filenames that should be aligned
+
+        @return (list) : list of aligned CCDData objects
+        """
+        # define a helping function for the estimation of the first star center
+        def estimate_px(data):
+            """
+            Returns an estimate for the center position after a user input
+
+            Parameter
+                data (array) : the data arra with the stars, has to be in a form to call plt.imshow(data)
+            """
+            # a callback function that handles the click in the image
+            def onclick(event):
+                """
+                Writes the current x and y positions to the coresponding variables
+                """
+                nonlocal x, y
+                if event.inaxes is not None:
+                    x = int(event.xdata)
+                    y = int(event.ydata)
+                    print(f"Clicked on: {x}  {y}")
+            
+            # show the data
+            fig, ax = plt.subplots()
+            ax.imshow(data, cmap='Greys', norm=LogNorm(vmin=0.0001))
+
+            x, y = 0, 0
+
+            print("\nClick in the image to set an estimate for the first star center.\nThe last click before closing the window will be used.")
+            # connect the event handling to allow the interaction with the mouse
+            cid = fig.canvas.mpl_connect('button_press_event', onclick)
+            plt.show()
+
+            return x, y
+
+        # helping function to determine the limits for a cutout
+        def limits(x, y, halve_size):
+            x_min = x - halve_size
+            x_max = x + halve_size
+            y_min = y - halve_size
+            y_max = y + halve_size
+            return x_min, x_max, y_min, y_max
+        
+        # open the taget image
+        with fits.open(to_combine[0]) as file:
+            target = file[0].data
+        
+        # getting the first estimate of the center of the star
+        x, y = 0, 0
+        x, y = estimate_px(target)
+
+        # getting the cutout limits for the fit
+        x_min, x_max, y_min, y_max = limits(x, y, 50)
+
+        # only use the cutout to decrease the data for the fit
+        fit_data = target[y_min:y_max, x_min:x_max]
+
+        # find the position of the max
+        max_idx = np.where(fit_data == np.max(fit_data))
+        x = int(max_idx[1])
+        y = int(max_idx[0])
+        # determine the position in the whole image
+        x0 = x + x_min
+        y0 = y + y_min
+
+        # generate a list of aligned images
+        aligned = []
+        x_prev = x0
+        y_prev = y0
+
+        for img in to_combine:
+            print(img)
+            # open the current file
+            with fits.open(img) as file:
+                source = file[0].data
+            
+            # make a cutout of the new image
+            x_min, x_max, y_min, y_max = limits(x_prev, y_prev, 50)
+            fit_data = source[y_min:y_max, x_min:x_max]
+            # apply a median filter to eliminate outliers
+            med_data = median_filter(fit_data, size=10)
+            
+            # find the position of the new max
+            max_idx = np.where(med_data == np.max(med_data))
+            
+            x1 = int(max_idx[1][0]) + x_min
+            y1 = int(max_idx[0][0]) + y_min
+
+            # calculate the difference to the target image
+            dx = x0 - x1
+            dy = y0 - y1
+            print("Shift: {}  {}".format(dx, dy))
+
+            # shift the data to match the target
+            shifted_data = shift(source, [dy, dx])
+            shifted_data = CCDData(data=shifted_data, unit='adu')
+            aligned.append(shifted_data)
+
+            # update the previouse value to center the next cutout
+            x_prev = x1
+            y_prev = y1
+        
+        return aligned
+
+    @staticmethod
+    def align_wcs(to_combine: list[CCDData]) -> list[CCDData]:
+        """!
+        Aligns the given images using the wcs information from he header
+
+        @param to_combine (list) : list of file names
+
+        @return (list) : list of aligned CCDData objects
+        """
+        # generating a target wcs to which all images are projected to
+        with fits.open(to_combine[0]) as file:
+            target_wcs: WCS = WCS(header=file[0].header)
+
+        def align_img(img, target_wcs):
+            with fits.open(img) as file:
+                ccd = CCDData(data=file[0].data, wcs=WCS(header=file[0].header), unit='adu')
+                new_image = wcs_project(ccd, target_wcs)
+                print(f"{img} aligned successfully")
+                return new_image 
+
+        aligned: list[CCDData] = [align_img(img, target_wcs) for img in to_combine]
+        
+        return aligned
+
     def best_dark(self, target: float) -> CCDData:
         """!Finds the best dark
 
@@ -335,3 +505,63 @@ class DataReduction():
         self.master_frames['flat'] = {ccd.header['filter']: ccd for ccd in self.ifc_reduced.ccds(imagetyp=self.imagetypes['flat'], combined=True)}
 
         return self.master_frames['flat']
+
+    def reduce_lights(self) -> None:
+        """!Corrects the light frames. But does NOT create a master out of them"""
+        # ensure all necessary files are available
+        if self.master_frames['bias'] == None:
+            self.reduce_bias()
+        if self.master_frames['dark'] == None:
+            self.reduce_darks()
+        if self.master_frames['flat'] == None:
+            self.reduce_flats()
+
+        # correction of light frames
+        for light, fname in self.ifc_raw.ccds(imagetyp=self.imagetypes['light'], return_fname=True):
+            light = subtract_bias(light, self.master_frames['bias'])
+            light = subtract_dark(light, self.best_dark(light.header['exptime']), exposure_time='exptime', exposure_unit=units.second, scale=True)
+            right_flat = self.master_frames['flat'][light.header['filter']]
+            light = flat_correct(light, right_flat)
+            light.write(self.reduced_path / fname, overwrite=True)
+    
+    def stack_light(self, alignment: str='none') -> None:
+        """!
+        Stacks the light frames and alignes them, if desired
+        
+        @param alignment (string) : optional, string that sates the alignment method. Possibilities are 'none' (default), 'star1', 'star2' and 'wcs'. Otherwise a value Error will be raised. 'none' stacks the iamges without aligning them, 'star1' uses the astroalign library, 'star2' requires a usir input to detect a star, 'wcs' uses the wcs information from the header.
+            Details to 'star2': an image will be shown using matplotlib.pyplot.imshow(). Click on the star, that should be aligned.
+        """
+        self.ifc_reduced.refresh()
+
+        # create a set of the filters used for the light frames
+        used_filters = set(h['filter'] for h in self.ifc_reduced.headers(imagetyp=self.imagetypes['light']))
+
+        # create a set of the observed objects
+        observed_objects = set(h['object'] for h in self.ifc_reduced.headers(imagetyp=self.imagetypes['light']))
+
+        for obj in observed_objects:
+            for filt in used_filters:
+                to_combine: list[str] = self.ifc_reduced.files_filtered(imagetyp=self.imagetypes['light'], filter=filt, object=obj, include_path=True)
+
+                # for some combinations there might not be any files
+                if len(to_combine) == 0:
+                    continue
+
+                # stacking the images
+                match alignment:
+                    case 'none':
+                        print("No alignment will be used")
+
+                    case 'star1':
+                        to_combine = self.align_astroalign(to_combine)
+
+                    case 'star2':
+                        to_combine = self.align_simple(to_combine)
+
+                    case 'wcs':
+                        to_combine = self.align_wcs(to_combine)
+
+                    case _:
+                        raise ValueError("Invalid alignement method! Valid values are 'none', 'star1', 'star2' and 'wcs' but '{}' was given.".format(alignment))
+                
+                self.__combine(to_combine, 'light', obj, filt)
