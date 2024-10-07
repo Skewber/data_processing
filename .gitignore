@@ -1,5 +1,7 @@
-doxigen/
+documentation/latex
+documentation/Doxyfile
 testdata/
 source/__pycache__/
 notes.txt
 .vscode/
+test.py
