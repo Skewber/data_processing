@@ -307,7 +307,7 @@ class DataReduction():
         else:
             raise AttributeError("Expected dark frames to exist. Ensure that there exist at least one dark frame before running this function.")
             
-    def check_master(self, frametype: str, master: str='') -> bool:
+    def check_master(self, frametype:str, master:str='') -> bool:
         """!Checks if  a specific master frame exist
         
         @param frametype (str) : specify which frametype should be checked. Valid are 'bias', 'dark', 'flat', 'light'
@@ -331,7 +331,7 @@ class DataReduction():
             else:
                 raise ValueError("The given filename for a master bias is not valid. Make sure not to include the foldername and only the filename. '{}' was given".format(master))
 
-    def reduce_bias(self, force_new_master: bool=False, keep_files: bool=False) -> CCDData:
+    def reduce_bias(self, force_new_master:bool=False, keep_files:bool=False) -> CCDData:
         """!
         Calibrates the bias frames and stacks them to a master bias. If there is already a masterbias in the folder for reduced data. This one will be used instead of computing it new
 
@@ -377,7 +377,7 @@ class DataReduction():
 
         return self.master_frames['bias']
     
-    def reduce_darks(self, force_new_master: bool=False, keep_files: bool=False) -> dict[float, CCDData]:
+    def reduce_darks(self, force_new_master:bool=False, keep_files:bool=False, master_bias:str|CCDData=None) -> dict[float, CCDData]:
         """!Calibrates the dark frames and stacks them to a master dark
         
         @param force_new_master (bool) : (optional) If True, an existing master will be ignored and overwritten. Otherwise the existing will be used.
@@ -441,7 +441,7 @@ class DataReduction():
 
         return self.master_frames['dark']
 
-    def reduce_flats(self, force_new_master: bool=False, keep_files: bool=False) -> dict[str, CCDData]:
+    def reduce_flats(self, force_new_master:bool=False, keep_files:bool=False, master_bias:str|CCDData=None, master_dark:str|CCDData=None) -> dict[str, CCDData]:
         """!Calibrates the flat frames and stacks them to a master flat
         
         @param force_new_master (bool) : (optional) If True, an existing master will be ignored and overwritten. Otherwise the existing will be used.
@@ -506,7 +506,7 @@ class DataReduction():
 
         return self.master_frames['flat']
 
-    def reduce_lights(self) -> None:
+    def reduce_lights(self, master_bias:str|CCDData=None, master_dark:str|CCDData=None, master_flat:str|CCDData=None) -> None:
         """!Corrects the light frames. But does NOT create a master out of them"""
         # ensure all necessary files are available
         if self.master_frames['bias'] == None:
