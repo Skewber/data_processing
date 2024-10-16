@@ -1,4 +1,4 @@
 var searchData=
 [
-  ['stack_5flight_0',['stack_light',['../classdata__reduction_1_1_data_reduction.html#aa29c007f6f26b836499e5dde69de82db',1,'data_reduction::DataReduction']]]
+  ['fromfits_0',['fromfits',['../classutilities_1_1_f_w_h_mestimator.html#a83e735a961f3a5644ae917db70dbc7d0',1,'utilities::FWHMestimator']]]
 ];

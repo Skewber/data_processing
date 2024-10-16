@@ -1,5 +1,5 @@
 var searchData=
 [
-  ['master_5fframes_0',['master_frames',['../classdata__reduction_1_1_data_reduction.html#a1dd9f98a154fac00f74f64685e15fa98',1,'data_reduction::DataReduction']]],
-  ['module_1',['module',['../namespacedata__reduction.html#a69ccc3fc01dcfbc1b35cb46d658b282c',1,'data_reduction']]]
+  ['fromfits_0',['fromfits',['../classutilities_1_1_f_w_h_mestimator.html#a83e735a961f3a5644ae917db70dbc7d0',1,'utilities::FWHMestimator']]],
+  ['fwhmestimator_1',['FWHMestimator',['../classutilities_1_1_f_w_h_mestimator.html',1,'utilities']]]
 ];
