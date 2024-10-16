@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from astropy.io import fits
+from scipy.ndimage import maximum_filter
 
 class FWHMestimator():
     def __init__(self, data):
@@ -62,8 +63,6 @@ class FWHMestimator():
             models[i] = star / max_val
         return np.mean(models, axis=0)
 
-
-    # TODO: add safety if too many stars are skipped --> possible infinity loop
     def estimate(self, nstars:int, fwhm_max:float=25, skip_max:int=10, full_output:bool=False) -> int:
         """!Estimates the FWHM for a given number of stars. Minimum FWHM is 2. Otherwise it is considered a cosmic and is skipped. This method can only estimate in even steps.
 
@@ -79,35 +78,43 @@ class FWHMestimator():
         positions = []
         estimates = []
         skipped = 0 # counter for skipped stars
-        mask = np.zeros_like(self.data) # empty mask to cover detected stars
-        while star < nstars and skipped < skip_max:
-            # find the max of the uncovered area
-            masked_array = np.ma.masked_array(self.data, mask)
-            max_idx = np.unravel_index(np.argmax(masked_array), masked_array.shape)
-            fwhm_value = self.data[*max_idx] * 0.5  # half the max value
+        # fimd maxima
+        max_data = maximum_filter(self.data, fwhm_max)
+        max_mask = (self.data == max_data)
+        max_coords = np.column_stack(np.where(max_mask))
+        max_coords = sorted(max_coords, key=lambda coord: self.data[tuple(coord)], reverse=True)
+        edge_buffer = fwhm_max // 2
+        max_coords = [coord for coord in max_coords
+                      if coord[0] > edge_buffer and coord[0] < self.data.shape[0] - edge_buffer
+                      and coord[1] > edge_buffer and coord[1] < self.data.shape[1] - edge_buffer]
+        max_coords = max_coords[:nstars+skip_max]
+
+        for i, star in enumerate(max_coords):
+            # estimate fwhm
+            fwhm_value = self.data[*star] * 0.5 # half the max value
             fwhm = 0
-            median = self.data[*max_idx]    # initial value, median has to drop below fwhm_value
+            median = self.data[*star]   # initial value, median has to drop below fwhm_value
             while median > fwhm_value and fwhm <= fwhm_max/2:
-                # increase the radius until median is too low
+                # increas the radius until the median is too low
                 fwhm += 1
-                median = self.__circular_median(*max_idx, fwhm)
-            # mask data for next iteration
-            mask[max_idx[0]-fwhm_max:max_idx[0]+fwhm_max, max_idx[1]-fwhm_max:max_idx[1]+fwhm_max] = True
+                median = self.__circular_median(*star, fwhm)
+            
             if fwhm > 1:
-                star += 1
-                positions.append(max_idx)
+                positions.append(star)
                 estimates.append(fwhm*2)
             else:
                 skipped += 1
 
-        # psf_model = self.psf_from_points(self.data, positions, np.mean(estimates))
-        # plt.imshow(psf_model)
-        # plt.show()
+            if i == nstars or skipped == skip_max:
+                break
+
+        psf_model = self.psf_from_points(self.data, positions, np.mean(estimates))
+        plt.imshow(psf_model)
+        plt.show()
         if not full_output:
             return np.mean(estimates)
         else:
             return estimates, skipped, positions
-
-
+    
 estimator = FWHMestimator.fromfits('./testdata/data_comb/reduced_data/master_light_NGC2281_filter_V.fits')
-print(estimator.estimate(55, full_output=True))
+estimator.estimate(100, full_output=True)
