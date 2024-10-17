@@ -1,5 +1,5 @@
 documentation/latex
-documentation/Doxyfile
+Doxyfile
 testdata/
 source/__pycache__/
 notes.txt

@@ -2,6 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from astropy.io import fits
 from scipy.ndimage import maximum_filter
+from scipy.optimize import curve_fit
 
 class FWHMestimator():
     def __init__(self, data):
@@ -9,7 +10,7 @@ class FWHMestimator():
     
     @classmethod
     def fromfits(cls, fname: str):
-        """!creat an instance from a given *.fits file
+        """!create an instance from a given *.fits file
 
         @param fname (str): filename of the file that should be used for estimation
         """
@@ -55,10 +56,10 @@ class FWHMestimator():
             @return (array): 2d array of the modeled PSF
     """
         fwhm = int(fwhm)
-        models = np.zeros((len(xy), 2*fwhm, 2*fwhm))
+        models = np.zeros((len(xy), 4*fwhm, 4*fwhm))
         for i, (x, y) in enumerate(xy):
             # scale max to 1 --> brigther stars do not have mor impact on the mean
-            star = data[x-fwhm:x+fwhm, y-fwhm:y+fwhm]
+            star = data[x-2*fwhm:x+2*fwhm, y-2*fwhm:y+2*fwhm]
             max_val = np.max(star)
             models[i] = star / max_val
         return np.mean(models, axis=0)
@@ -108,13 +109,25 @@ class FWHMestimator():
             if i == nstars or skipped == skip_max:
                 break
 
+        estimate = np.mean(estimates)
         psf_model = self.psf_from_points(self.data, positions, np.mean(estimates))
-        plt.imshow(psf_model)
-        plt.show()
+
+        # perform a gauss fit to psf model to get the final estimate
+        def gauss(x, mu, sigma, amp, offset):
+            return amp * np.exp(-(x-mu)**2 / (2 * sigma**2)) + offset
+        
+        bounds = [[0, 0, 0, 0],
+                  [psf_model.shape[0], psf_model.shape[0]/2, 1, 1]]
+
+        pixel = np.arange(0, psf_model.shape[0])
+        poptx, _ = curve_fit(gauss, pixel, psf_model[int(estimate//2),:], bounds=bounds)
+        popty, _ = curve_fit(gauss, pixel, psf_model[:, int(estimate//2)], bounds=bounds)
+
+        sig_to_fwhm = 2 * np.sqrt(2*np.log(2))  # conversion factor from sigma to fwhm
+        fwhm = (sig_to_fwhm * poptx[1] + sig_to_fwhm * popty[1]) / 2    # average over x and y direction
+
         if not full_output:
-            return np.mean(estimates)
+            return fwhm
         else:
-            return estimates, skipped, positions
+            return fwhm, skipped, positions, psf_model
     
-estimator = FWHMestimator.fromfits('./testdata/data_comb/reduced_data/master_light_NGC2281_filter_V.fits')
-estimator.estimate(100, full_output=True)
