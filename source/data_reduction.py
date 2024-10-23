@@ -20,7 +20,7 @@ filterwarnings(action="ignore", module="astropy")
 class DataReduction():
     """! Basic class for Data Reduction. For this class to work properly the used .fits files need a the following keywords in the header: 'EXPTIME', 'FILTER', 'OBJECT'. Optionally it can also contain wcs informations if an alignment of those is desired. If not provided the alignemt can also be done by matching stars in the image.
     """
-    def __init__(self, foldername_data: str, foldername_reduced: str="reduced_data") -> None:
+    def __init__(self, foldername_data: str, foldername_reduced: str="reduced_data", bias='', dark='', flat='', light='') -> None:
         """! Set up of general information
 
         @param foldername_data (str): name of the folder with the raw data to
@@ -40,8 +40,16 @@ class DataReduction():
         self.ifc_reduced: ImageFileCollection = ImageFileCollection(self.reduced_path)
 
         ## Defines the keywords in the header of the used fits files
-        self.imagetypes: dict[str, str] = {'bias':'', 'dark':'', 'flat':'', 'light':''}
+        self.imagetypes: dict[str, str] = {'bias':bias, 'dark':dark, 'flat':flat, 'light':light}
         
+        if bias == '' or dark == '' or flat == '' or light == '':
+            self.__get_framenames()
+
+        # set up dict for masters
+        ## Dictionary to store the master frames for a more convenient access
+        self.master_frames: dict = {'bias':None, 'dark':None, 'flat':None, 'light':None}
+    
+    def __get_framenames(self):
         keys = self.imagetypes.keys()
         frame_names = self.imagetypes.values()
 
@@ -63,10 +71,7 @@ class DataReduction():
         if '' in frame_names:
             raise ValueError(f"No name for the imagetype was found for at least one imagetype. The following types are determined:\n{self.imagetypes}.\nCheck your data again.")
 
-        # set up dict for masters
-        ## Dictionary to store the master frames for a more convenient access
-        self.master_frames: dict = {'bias':None, 'dark':None, 'flat':None, 'light':None}
-                
+
     def __combine(self, to_combine: list[CCDData | str], frame: str='frame', obj: str='', filt: str='', exposure: str='', mem_lim: float=8e9) -> CCDData:
         """!
         Combines the given images
