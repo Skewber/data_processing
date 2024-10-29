@@ -1,7 +1,8 @@
-documentation/latex
-documentation/Doxyfile
+documentation/
+Doxyfile
 testdata/
 source/__pycache__/
 notes.txt
 .vscode/
 test.py
+test2.py

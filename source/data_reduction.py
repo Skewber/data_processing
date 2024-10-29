@@ -20,7 +20,7 @@ filterwarnings(action="ignore", module="astropy")
 class DataReduction():
     """! Basic class for Data Reduction. For this class to work properly the used .fits files need a the following keywords in the header: 'EXPTIME', 'FILTER', 'OBJECT'. Optionally it can also contain wcs informations if an alignment of those is desired. If not provided the alignemt can also be done by matching stars in the image.
     """
-    def __init__(self, foldername_data: str, foldername_reduced: str="reduced_data") -> None:
+    def __init__(self, foldername_data: str, foldername_reduced: str="reduced_data", bias='', dark='', flat='', light='') -> None:
         """! Set up of general information
 
         @param foldername_data (str): name of the folder with the raw data to
@@ -39,11 +39,22 @@ class DataReduction():
         ## Collection of all images that are allready in the reduced folder
         self.ifc_reduced: ImageFileCollection = ImageFileCollection(self.reduced_path)
 
-        ## Defines the keywords in the header of the used fits files
-        self.imagetypes: dict[str, str] = {'bias':'', 'dark':'', 'flat':'', 'light':''}
+        # check if all framenames are provided
+        if bias=='' or dark=='' or flat=='' or light=='':
+            ## Defines the keywords in the header of the used fits files
+            self.imagetypes: dict[str, str] = self.__get_framenames(foldername_data)
+        else:
+            self.imagetypes: dict[str, str] = {'bias':bias, 'dark':dark, 'flat':flat, 'light':light}
+
+        # set up dict for masters
+        ## Dictionary to store the master frames for a more convenient access
+        self.master_frames: dict = {'bias':None, 'dark':None, 'flat':None, 'light':None}
+    
+    def __get_framenames(self, foldername_data):
+        imagetypes: dict[str, str] = {'bias':'', 'dark':'', 'flat':'', 'light':''}
         
-        keys = self.imagetypes.keys()
-        frame_names = self.imagetypes.values()
+        keys = imagetypes.keys()
+        frame_names = imagetypes.values()
 
         ## determine the strings that specify the imagetype
         for hdu, fname in self.ifc_raw.hdus(return_fname=True):
@@ -57,15 +68,14 @@ class DataReduction():
             if not img_type in frame_names:
                 for key in keys:
                     if key.lower() in img_type.lower():
-                        self.imagetypes[key] = img_type
+                        imagetypes[key] = img_type
         
         # raise an error if for at least one type ther is no name found
         if '' in frame_names:
-            raise ValueError(f"No name for the imagetype was found for at least one imagetype. The following types are determined:\n{self.imagetypes}.\nCheck your data again.")
+            raise ValueError(f"No name for the imagetype was found for at least one imagetype. The following types are determined:\n{imagetypes}.\nCheck your data again.")
+        
+        return imagetypes
 
-        # set up dict for masters
-        ## Dictionary to store the master frames for a more convenient access
-        self.master_frames: dict = {'bias':None, 'dark':None, 'flat':None, 'light':None}
                 
     def __combine(self, to_combine: list[CCDData | str], frame: str='frame', obj: str='', filt: str='', exposure: str='', mem_lim: float=8e9) -> CCDData:
         """!
@@ -524,44 +534,75 @@ class DataReduction():
             light = flat_correct(light, right_flat)
             light.write(self.reduced_path / fname, overwrite=True)
     
-    def stack_light(self, alignment: str='none') -> None:
+    @classmethod
+    def align_images(cls, filenames: list[str], alignment: str) -> list[CCDData]:
+        """Aligns the given images in order to stack them later on.
+
+        Args:
+            filenames (list): list of filenames that should be aligned. All images will be aligned in a way to macth the first one of the list.
+        """
+        match alignment:
+            case 'none':
+                print("No alignment will be used")
+                aligned = filenames
+
+            case 'star1':
+                aligned = cls.align_astroalign(filenames)
+
+            case 'star2':
+                aligned = cls.align_simple(filenames)
+
+            case 'wcs':
+                aligned = cls.align_wcs(filenames)
+
+            case _:
+                raise ValueError("Invalid alignement method! Valid values are 'none', 'star1', 'star2' and 'wcs' but '{}' was given.".format(alignment))
+
+        return aligned
+        
+
+    def stack_light(self, alignment: str='none', filelist=None, out_names=None) -> None:
         """!
         Stacks the light frames and alignes them, if desired
         
         @param alignment (string) : optional, string that sates the alignment method. Possibilities are 'none' (default), 'star1', 'star2' and 'wcs'. Otherwise a value Error will be raised. 'none' stacks the iamges without aligning them, 'star1' uses the astroalign library, 'star2' requires a usir input to detect a star, 'wcs' uses the wcs information from the header.
             Details to 'star2': an image will be shown using matplotlib.pyplot.imshow(). Click on the star, that should be aligned.
+        @param files (list) : list of list of filenames where each list is a seperate object
+        @param out_names (list[str]) : filename for the stacked files. Should have the same length as 'files'
+
+        @example align_images([['obj1_1', 'obj1_2', 'obj1_3']], 'object_1')
+        @example align_images([['obj1_1', 'obj1_2', 'obj1_3'],['obj2_1', 'obj2_2']], ['object_1', 'object_2'])
         """
         self.ifc_reduced.refresh()
 
-        # create a set of the filters used for the light frames
-        used_filters = set(h['filter'] for h in self.ifc_reduced.headers(imagetyp=self.imagetypes['light']))
+        if filelist == None:
+            # create a set of the filters used for the light frames
+            used_filters = set(h['filter'] for h in self.ifc_reduced.headers(imagetyp=self.imagetypes['light']))
 
-        # create a set of the observed objects
-        observed_objects = set(h['object'] for h in self.ifc_reduced.headers(imagetyp=self.imagetypes['light']))
+            # create a set of the observed objects
+            observed_objects = set(h['object'] for h in self.ifc_reduced.headers(imagetyp=self.imagetypes['light']))
 
-        for obj in observed_objects:
-            for filt in used_filters:
-                to_combine: list[str] = self.ifc_reduced.files_filtered(imagetyp=self.imagetypes['light'], filter=filt, object=obj, include_path=True)
+            for obj in observed_objects:
+                for filt in used_filters:
+                    to_combine: list[str] = self.ifc_reduced.files_filtered(imagetyp=self.imagetypes['light'], filter=filt, object=obj, include_path=True)
 
-                # for some combinations there might not be any files
-                if len(to_combine) == 0:
-                    continue
+                    # for some combinations there might not be any files
+                    if len(to_combine) == 0:
+                        continue
 
-                # stacking the images
-                match alignment:
-                    case 'none':
-                        print("No alignment will be used")
+                    # aligning the images
+                    to_combine = self.align_images(to_combine, alignment)
+                    
+                    self.__combine(to_combine, 'light', obj, filt)
 
-                    case 'star1':
-                        to_combine = self.align_astroalign(to_combine)
-
-                    case 'star2':
-                        to_combine = self.align_simple(to_combine)
-
-                    case 'wcs':
-                        to_combine = self.align_wcs(to_combine)
-
-                    case _:
-                        raise ValueError("Invalid alignement method! Valid values are 'none', 'star1', 'star2' and 'wcs' but '{}' was given.".format(alignment))
-                
-                self.__combine(to_combine, 'light', obj, filt)
+        else:
+            # check length of input
+            if len(filelist) == 1 and type(out_names) == str:
+                to_combine = self.align_images(filelist[0], alignment)
+                self.__combine(to_combine, 'light', out_names)
+            elif len(filelist) == len(out_names):
+                for files, name in zip(filelist, out_names):
+                    to_combine = self.align_images(files, alignment)
+                    self.__combine(to_combine, 'light', name)
+            else:
+                raise ValueError("The provided filnames does not match the provided number of output filenames. You provided a list of ")
