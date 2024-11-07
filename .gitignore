@@ -1,4 +1,4 @@
-documentation/
+docs/
 Doxyfile
 testdata/
 source/__pycache__/
@@ -6,3 +6,4 @@ notes.txt
 .vscode/
 test.py
 test2.py
+*.log

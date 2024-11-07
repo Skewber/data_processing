@@ -13,9 +13,42 @@ import os
 from warnings import filterwarnings
 import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
+import logging
 
 filterwarnings(action="ignore", module="ccdproc")
 filterwarnings(action="ignore", module="astropy")
+
+def get_logfilename(basename=None):
+    """creade unique name for a logfile
+
+    Args:
+        basename (str, optional): Name the file should have. If it already exists the resulting name is basename_00x.log. Defaults to None.
+
+    Returns:
+        str: filename for the logfile
+    """
+    if basename == None:
+        basename, _ = os.path.splitext(__file__)
+    counter = 1
+
+    filename = f"{basename}.log"
+
+    while True:
+        if not os.path.exists(filename):
+            return filename
+        
+        filename = f"{basename}_{counter:03}.log"
+        counter += 1
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+logger.propagate = False
+formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s", style="%")
+
+file_handler = logging.FileHandler(get_logfilename())
+file_handler.setLevel(logging.DEBUG)
+file_handler.setFormatter(formatter)
+logger.addHandler(file_handler)
 
 class DataReduction():
     """! Basic class for Data Reduction. For this class to work properly the used .fits files need a the following keywords in the header: 'EXPTIME', 'FILTER', 'OBJECT'. Optionally it can also contain wcs informations if an alignment of those is desired. If not provided the alignemt can also be done by matching stars in the image.
@@ -31,6 +64,7 @@ class DataReduction():
         self.raw_path: Path = Path('.', foldername_data)
         ## Collection of all images that are stored in the raw data path
         self.ifc_raw: ImageFileCollection = ImageFileCollection(self.raw_path)
+        logger.info(f'Detected {len(self.ifc_raw.files)} files in the raw data directory.')
 
         # set up for reduced data path
         ## Path to the reduced data, which will be created if it does not exist
@@ -38,6 +72,7 @@ class DataReduction():
         self.reduced_path.mkdir(exist_ok=True)
         ## Collection of all images that are allready in the reduced folder
         self.ifc_reduced: ImageFileCollection = ImageFileCollection(self.reduced_path)
+        logger.info(f'Detected {len(self.ifc_reduced.files)} files in the reduced data directory.')
 
         # check if all framenames are provided
         if bias=='' or dark=='' or flat=='' or light=='':
@@ -45,6 +80,11 @@ class DataReduction():
             self.imagetypes: dict[str, str] = self.__get_framenames(foldername_data)
         else:
             self.imagetypes: dict[str, str] = {'bias':bias, 'dark':dark, 'flat':flat, 'light':light}
+            for hdu, fname in self.ifc_raw.hdus(return_fname=True):
+                # add 'bunit' to every header. Needed later on
+                hdu.header['bunit'] = 'adu'
+                hdu.writeto(Path('.', foldername_data, fname), overwrite=True)
+            logger.info("Added keyword 'BUNIT' with the value 'adu' to each header.")
 
         # set up dict for masters
         ## Dictionary to store the master frames for a more convenient access
@@ -69,10 +109,12 @@ class DataReduction():
                 for key in keys:
                     if key.lower() in img_type.lower():
                         imagetypes[key] = img_type
-        
+        logger.info("Image types were detected from the headers.")
         # raise an error if for at least one type ther is no name found
         if '' in frame_names:
-            raise ValueError(f"No name for the imagetype was found for at least one imagetype. The following types are determined:\n{imagetypes}.\nCheck your data again.")
+            message = f"No name for the imagetype was detected for at least one imagetype. The following types are determined:\n{imagetypes}.\nCheck your data again."
+            logger.error(message)
+            raise ValueError(message)
         
         return imagetypes
 
@@ -122,6 +164,8 @@ class DataReduction():
 
         # save the image
         master.write(self.reduced_path / file_name, overwrite=True)
+
+        logger.info(f"Combined {len(to_combine)} frames to one master {frame} frame.\nMater filename:\t{file_name}\nObject:\t{obj}\nFilter:\t{filt}\nExposure:\t{exposure}\nThe used frames are:\n{'\n'.join(to_combine)}")
 
         return master
 
@@ -350,6 +394,7 @@ class DataReduction():
         
         @return master_bias (CCDData) : master bias as a CCDData object
         """
+        logger.info("Starting reduction of bias frames")
         self.ifc_reduced.refresh()
         if not self.check_master("bias") or force_new_master:
             # There is no need for somehow calibrating them. Just copy to the calibrated path
@@ -380,11 +425,14 @@ class DataReduction():
             print("There is already a master bias.")
             master_bias: list[str] = self.ifc_reduced.files_filtered(imagetyp=self.imagetypes['bias'], combined=True)
             if len(master_bias) > 1:
-                raise RuntimeError(f"More than one master bias are detected. Make shure that at most one frame is available. The found files are {master_bias}")
+                logger.error(f"More than one master bias are detected. Make sure that at most one frame is available. The found files are {'\n'.join(master_bias)}")
+                raise RuntimeError(f"More than one master bias are detected. Make sure that at most one frame is available. The found files are {master_bias}")
             else:
                 with fits.open(self.reduced_path / master_bias[0]) as file:
                     self.master_frames['bias'] = CCDData(file[0].data, unit='adu')
+                logger.info(f"One master bias was detected and will be used.\nFilename: {Path('.', f'{self.reduced_path}/{master_bias[0]}')}")
 
+        logger.info("Finished reduction of bias frames.")
         return self.master_frames['bias']
     
     def reduce_darks(self, force_new_master: bool=False, keep_files: bool=False) -> dict[float, CCDData]:
@@ -396,6 +444,7 @@ class DataReduction():
 
         @return (dict) : dictionary with master darks. key=exposure time, value CCDData object
         """
+        logger.info("Started reduction of dark frames.")
         self.ifc_reduced.refresh()
         # 1) check for existing
         if not self.check_master("dark") or force_new_master:
@@ -428,6 +477,7 @@ class DataReduction():
 
             if not keep_files:
                 [os.remove(Path('.', file)) for file in reduced_darks]
+                logger.info("Removed all reduced dark frame files.")
 
         # in all other cases there is already a master dark that can be used
         else:
@@ -440,15 +490,18 @@ class DataReduction():
                 with fits.open(dark) as file:
                     exp_time = int(file[0].header['exptime'])
                     if exp_time in exptimes:
+                        logger.error(f"More than one master dark for the same exposure time are detected. Make sure that at most one file for each exposure time is available. The found files are {'\n'.join(master_darks)}")
                         raise RuntimeError(f"More than one master dark for the same exposure time are detected. Make sure that at most one file for each exposure time is available. The found files are {master_darks}")
                     else:
                         self.master_frames['dark'] = {exp_time:CCDData(file[0].data, unit='adu')}
+                        logger.info(f"One master dark with {exp_time} s exposure was detected and will be used.\nFilename: {dark}")
                         exptimes = list(self.master_frames['dark'].keys())
 
         # create a dictionary for better access
         self.ifc_reduced.refresh()
         self.master_frames['dark'] = {ccd.header['exptime']: ccd for ccd in self.ifc_reduced.ccds(imagetyp=self.imagetypes['dark'], combined=True)}
 
+        logger.info("Finished reduction of dark frames.")
         return self.master_frames['dark']
 
     def reduce_flats(self, force_new_master: bool=False, keep_files: bool=False) -> dict[str, CCDData]:
@@ -460,6 +513,7 @@ class DataReduction():
 
         @return (dict) : dictionary with master flats. key=filter, value CCDData object
         """
+        logger.info("Starting reduction of flat frames.")
         # 1) check for existing
         if not self.check_master('flat') or force_new_master:
             # check necessary files
@@ -495,29 +549,34 @@ class DataReduction():
             reduced_flats = self.__rm_master(reduced_flats)
             if not keep_files:
                 [os.remove(file) for file in reduced_flats]
+                logger.info("Removed all reduced flat frame files.")
         
         # in all other cases there are already master flats
         else:
             print("There is already a master flat.")
-            master_flats = self.ifc_reduced.files_filtered(iamgetyp=self.imagetypes['flat'], combined=True, include_path=True)
+            master_flats = self.ifc_reduced.files_filtered(imagetyp=self.imagetypes['flat'], combined=True, include_path=True)
             filters: list[str] = []
             for flat in master_flats:
                 # iterate over filters and check for duplicates
                 with fits.open(flat) as file:
                     used_filter = file[0].header['filter']
                     if used_filter in filters:
+                        logger.error(f"More than one master flat for the same filter are detected. Make shure that at most one file for each filter is available. The found files are {'\n'.join(master_flats)}")
                         raise RuntimeError(f"More than one master flat for the same filter are detected. Make shure that at most one file for each filter is available. The found files are {master_flats}")
                     else:
                         self.master_frames['flat'] = {used_filter:CCDData(file[0].data, unit='adu')}
+                        logger.info(f"One master flat for Filter {used_filter} was detected and will be used.\nFilename: {flat}")
         
         # create dictionary for better access
         self.ifc_reduced.refresh()
         self.master_frames['flat'] = {ccd.header['filter']: ccd for ccd in self.ifc_reduced.ccds(imagetyp=self.imagetypes['flat'], combined=True)}
 
+        logger.info("Finished reduction of flat frames.")
         return self.master_frames['flat']
 
     def reduce_lights(self) -> None:
         """!Corrects the light frames. But does NOT create a master out of them"""
+        logger.info("Starting reduction of light frames.")
         # ensure all necessary files are available
         if self.master_frames['bias'] == None:
             self.reduce_bias()
@@ -533,7 +592,8 @@ class DataReduction():
             right_flat = self.master_frames['flat'][light.header['filter']]
             light = flat_correct(light, right_flat)
             light.write(self.reduced_path / fname, overwrite=True)
-    
+        logger.info("Finished reduction of light frames.")
+
     @classmethod
     def align_images(cls, filenames: list[str], alignment: str) -> list[CCDData]:
         """Aligns the given images in order to stack them later on.
@@ -543,20 +603,24 @@ class DataReduction():
         """
         match alignment:
             case 'none':
-                print("No alignment will be used")
                 aligned = filenames
+                logger.info("No alignment will be used for combination.")
 
             case 'star1':
                 aligned = cls.align_astroalign(filenames)
+                logger.info("The frames will be aligned by the 'astroalign' library.")
 
             case 'star2':
                 aligned = cls.align_simple(filenames)
+                logger.info("The frames will be aligned with one reference star selected by the user.")
 
             case 'wcs':
+                logger.info("The frames will be aligned according to their WCS information from the headers.")
                 aligned = cls.align_wcs(filenames)
 
             case _:
-                raise ValueError("Invalid alignement method! Valid values are 'none', 'star1', 'star2' and 'wcs' but '{}' was given.".format(alignment))
+                logger.error("Invalid alignemntmethod was given. Valid are 'none', 'star1', 'star2', and 'wcs' but '{alignment}' was given.")
+                raise ValueError(f"Invalid alignement method! Valid values are 'none', 'star1', 'star2' and 'wcs' but '{alignment}' was given.")
 
         return aligned
         
@@ -605,4 +669,5 @@ class DataReduction():
                     to_combine = self.align_images(files, alignment)
                     self.__combine(to_combine, 'light', name)
             else:
-                raise ValueError("The provided filnames does not match the provided number of output filenames. You provided a list of ")
+                logger.error(f"The number of input filelists and output filenames does not match. You provided {len(filelist)} filelists and {len(out_names)} output filenames.")
+                raise ValueError(f"The provided filnames does not match the provided number of output filenames. You provided {len(filelist)} filelists and {len(out_names)}.")
