@@ -1,53 +1,58 @@
-from pathlib import Path
+import logging
+import os
 import shutil
+from pathlib import Path
+from warnings import filterwarnings
+
+import matplotlib.pyplot as plt
+from matplotlib.colors import LogNorm
 import numpy as np
 from scipy.ndimage import median_filter, shift
-from ccdproc import ImageFileCollection, combine, subtract_bias, subtract_dark, flat_correct, wcs_project
+
+import astroalign as aa
+from astropy import units
 from astropy.io import fits
 from astropy.nddata import CCDData
 from astropy.stats import mad_std
-from astropy import units
 from astropy.wcs import WCS
-import astroalign as aa
-import os
-from warnings import filterwarnings
-import matplotlib.pyplot as plt
-from matplotlib.colors import LogNorm
-import logging
+from ccdproc import (ImageFileCollection, combine, subtract_bias,
+                     subtract_dark, flat_correct, wcs_project)
 
+# FIXME: do not ignore all warnings
 filterwarnings(action="ignore", module="ccdproc")
 filterwarnings(action="ignore", module="astropy")
 
-def get_logfilename(basename=None):
-    """creade unique name for a logfile
+def get_logfilename():
+    """create unique name for a logfile
 
-    Args:
-        basename (str, optional): Name the file should have. If it already exists the resulting name is basename_00x.log. Defaults to None.
+        @param basename (str, optional): Name the file should have. If it already exists the resulting name is basename_00x.log. Defaults to None.
 
-    Returns:
-        str: filename for the logfile
+        @return str: filename for the logfile
     """
-    if basename == None:
-        basename, _ = os.path.splitext(__file__)
+    basename, _ = os.path.splitext(__file__)
     counter = 1
-
     filename = f"{basename}.log"
-
     while True:
         if not os.path.exists(filename):
             return filename
-        
         filename = f"{basename}_{counter:03}.log"
         counter += 1
 
+# setup for the logger
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 logger.propagate = False
-formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s", style="%")
 
+# setup for the console handler
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.INFO)
+console_handler.setFormatter(logging.Formatter("%(levelname)s - %(message)s", style="%"))
+logger.addHandler(console_handler)
+
+# setup for the filehandeler
 file_handler = logging.FileHandler(get_logfilename())
 file_handler.setLevel(logging.DEBUG)
-file_handler.setFormatter(formatter)
+file_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s", style="%"))
 logger.addHandler(file_handler)
 
 class DataReduction():
@@ -81,14 +86,16 @@ class DataReduction():
         else:
             self.imagetypes: dict[str, str] = {'bias':bias, 'dark':dark, 'flat':flat, 'light':light}
             for hdu, fname in self.ifc_raw.hdus(return_fname=True):
+                # FIXME: There might be a different unit. Which will be overwritten by this.
                 # add 'bunit' to every header. Needed later on
                 hdu.header['bunit'] = 'adu'
                 hdu.writeto(Path('.', foldername_data, fname), overwrite=True)
-            logger.info("Added keyword 'BUNIT' with the value 'adu' to each header.")
+            logger.debug("Added keyword 'BUNIT' with the value 'adu' to each header.")
 
         # set up dict for masters
         ## Dictionary to store the master frames for a more convenient access
         self.master_frames: dict = {'bias':None, 'dark':None, 'flat':None, 'light':None}
+        logger.info("Finished setup.\n")
     
     def __get_framenames(self, foldername_data):
         imagetypes: dict[str, str] = {'bias':'', 'dark':'', 'flat':'', 'light':''}
@@ -98,6 +105,7 @@ class DataReduction():
 
         ## determine the strings that specify the imagetype
         for hdu, fname in self.ifc_raw.hdus(return_fname=True):
+            # FIXME: There might be a different unit. Which will be overwritten by this.
             # add 'bunit' to every header. Needed later on
             hdu.header['bunit'] = 'adu'
             hdu.writeto(Path('.', foldername_data, fname), overwrite=True)
@@ -109,7 +117,8 @@ class DataReduction():
                 for key in keys:
                     if key.lower() in img_type.lower():
                         imagetypes[key] = img_type
-        logger.info("Image types were detected from the headers.")
+        logger.debug("Added keyword 'BUNIT' with the value 'adu' to each header.")
+        logger.debug("Image types were detected from the headers.")
         # raise an error if for at least one type ther is no name found
         if '' in frame_names:
             message = f"No name for the imagetype was detected for at least one imagetype. The following types are determined:\n{imagetypes}.\nCheck your data again."
@@ -119,7 +128,7 @@ class DataReduction():
         return imagetypes
 
                 
-    def __combine(self, to_combine: list[CCDData | str], frame: str='frame', obj: str='', filt: str='', exposure: str='', mem_lim: float=8e9) -> CCDData:
+    def __combine(self, to_combine: list[CCDData | str], frame: str='frame', obj: str='', filt: str='', exposure: str='', mem_lim: float=8e9, filenames=None) -> CCDData:
         """!
         Combines the given images
 
@@ -165,8 +174,12 @@ class DataReduction():
         # save the image
         master.write(self.reduced_path / file_name, overwrite=True)
 
-        logger.info(f"Combined {len(to_combine)} frames to one master {frame} frame.\nMater filename:\t{file_name}\nObject:\t{obj}\nFilter:\t{filt}\nExposure:\t{exposure}\nThe used frames are:\n{'\n'.join(to_combine)}")
-
+        if type(to_combine[0]) == str:
+            logger.debug(f"Combined {len(to_combine)} frames to one master {frame} frame.\nMaster filename:\t{file_name}\nObject:\t{obj}\nFilter:\t{filt}\nExposure:\t{exposure}\nThe used frames are:\n\t{'\n\t'.join(to_combine)}")
+        elif filenames != None:
+            logger.debug(f"Combined {len(to_combine)} frames to one master {frame} frame.\nMaster filename:\t{file_name}\nObject:\t{obj}\nFilter:\t{filt}\nExposure:\t{exposure}\nThe used frames are:\n\t{'\n\t'.join(filenames)}")
+        else:
+            logger.debug(f"Combined {len(to_combine)} frames to one master {frame} frame.\nMaster filename:\t{file_name}\nObject:\t{obj}\nFilter:\t{filt}\nExposure:\t{exposure}")
         return master
 
     def __rm_master(self, filelist: list[str]) -> list[str]:
@@ -200,7 +213,7 @@ class DataReduction():
             registered_img = CCDData(aa.register(source=source, target=target,
                                                 max_control_points=50, detection_sigma=5)[0],
                                                 unit='adu')
-            print(f"{img} aligned successfully")
+            logger.debug(f"{img} aligned successfully")
             return registered_img
 
         aligned: list[CCDData] = [align_img(img, target) for img in to_combine]
@@ -224,27 +237,39 @@ class DataReduction():
             Parameter
                 data (array) : the data arra with the stars, has to be in a form to call plt.imshow(data)
             """
+            marker = None   # marker to show the position of the click
             # a callback function that handles the click in the image
             def onclick(event):
                 """
                 Writes the current x and y positions to the coresponding variables
                 """
-                nonlocal x, y
-                if event.inaxes is not None:
-                    x = int(event.xdata)
-                    y = int(event.ydata)
-                    print(f"Clicked on: {x}  {y}")
+                nonlocal x, y, marker
+                if fig.canvas.toolbar.mode == '':
+                    if event.inaxes is not None:
+                        x = int(event.xdata)
+                        y = int(event.ydata)
+                        logger.info(f"Clicked on: {x}\t{y}")
+
+                        # remove marker if it exists
+                        if marker is not None:
+                            marker.remove()
+                        
+                        marker = ax.plot(x, y, 'ro', markersize=10, markerfacecolor='none', label="Selected Position")[0]
+                        fig.canvas.draw()
             
             # show the data
             fig, ax = plt.subplots()
+            ax.set_title("Click in the image to set an estimate for the first star center.\n"
+                         "The last click before closing the window will be used.")
             ax.imshow(data, cmap='Greys', norm=LogNorm(vmin=0.0001))
 
             x, y = 0, 0
 
-            print("\nClick in the image to set an estimate for the first star center.\nThe last click before closing the window will be used.")
             # connect the event handling to allow the interaction with the mouse
             cid = fig.canvas.mpl_connect('button_press_event', onclick)
             plt.show()
+
+            fig.canvas.mpl_disconnect(cid)
 
             return x, y
 
@@ -261,11 +286,10 @@ class DataReduction():
             target = file[0].data
         
         # getting the first estimate of the center of the star
-        x, y = 0, 0
         x, y = estimate_px(target)
 
         # getting the cutout limits for the fit
-        x_min, x_max, y_min, y_max = limits(x, y, 50)
+        x_min, x_max, y_min, y_max = limits(x, y, 50)   # FIXME: determine the size of the cutout dynamically
 
         # only use the cutout to decrease the data for the fit
         fit_data = target[y_min:y_max, x_min:x_max]
@@ -284,7 +308,6 @@ class DataReduction():
         y_prev = y0
 
         for img in to_combine:
-            print(img)
             # open the current file
             with fits.open(img) as file:
                 source = file[0].data
@@ -304,12 +327,13 @@ class DataReduction():
             # calculate the difference to the target image
             dx = x0 - x1
             dy = y0 - y1
-            print("Shift: {}  {}".format(dx, dy))
+            logger.debug(f"Shift: {dx} {dy}")
 
             # shift the data to match the target
             shifted_data = shift(source, [dy, dx])
             shifted_data = CCDData(data=shifted_data, unit='adu')
             aligned.append(shifted_data)
+            logger.debug(f"{img} aligned successfully")
 
             # update the previouse value to center the next cutout
             x_prev = x1
@@ -334,7 +358,7 @@ class DataReduction():
             with fits.open(img) as file:
                 ccd = CCDData(data=file[0].data, wcs=WCS(header=file[0].header), unit='adu')
                 new_image = wcs_project(ccd, target_wcs)
-                print(f"{img} aligned successfully")
+                logger.debug(f"{img} aligned successfully.")
                 return new_image 
 
         aligned: list[CCDData] = [align_img(img, target_wcs) for img in to_combine]
@@ -383,7 +407,9 @@ class DataReduction():
             if os.path.exists(self.reduced_path / master):
                 return True
             else:
-                raise ValueError("The given filename for a master bias is not valid. Make sure not to include the foldername and only the filename. '{}' was given".format(master))
+                message = f"The given filename for a master bias is not valid. Make sure not to include the foldername and only the filename. '{master}' was given"
+                logger.error(message)
+                raise ValueError(message)
 
     def reduce_bias(self, force_new_master: bool=False, keep_files: bool=False) -> CCDData:
         """!
@@ -394,7 +420,7 @@ class DataReduction():
         
         @return master_bias (CCDData) : master bias as a CCDData object
         """
-        logger.info("Starting reduction of bias frames")
+        logger.info("Started reduction of bias frames")
         self.ifc_reduced.refresh()
         if not self.check_master("bias") or force_new_master:
             # There is no need for somehow calibrating them. Just copy to the calibrated path
@@ -422,7 +448,7 @@ class DataReduction():
 
         # in all other cases there is already a master bias that can be used
         else:
-            print("There is already a master bias.")
+            logger.info("One or more master bias were detected.")
             master_bias: list[str] = self.ifc_reduced.files_filtered(imagetyp=self.imagetypes['bias'], combined=True)
             if len(master_bias) > 1:
                 logger.error(f"More than one master bias are detected. Make sure that at most one frame is available. The found files are {'\n'.join(master_bias)}")
@@ -430,9 +456,9 @@ class DataReduction():
             else:
                 with fits.open(self.reduced_path / master_bias[0]) as file:
                     self.master_frames['bias'] = CCDData(file[0].data, unit='adu')
-                logger.info(f"One master bias was detected and will be used.\nFilename: {Path('.', f'{self.reduced_path}/{master_bias[0]}')}")
+                logger.debug(f"One master bias was detected and will be used.\nFilename: {Path('.', f'{self.reduced_path}/{master_bias[0]}')}")
 
-        logger.info("Finished reduction of bias frames.")
+        logger.info("Finished reduction of bias frames.\n")
         return self.master_frames['bias']
     
     def reduce_darks(self, force_new_master: bool=False, keep_files: bool=False) -> dict[float, CCDData]:
@@ -481,7 +507,7 @@ class DataReduction():
 
         # in all other cases there is already a master dark that can be used
         else:
-            print("There is already a master dark.")
+            logger.info("One or more master darks were detected.")
             master_darks = self.ifc_reduced.files_filtered(imagetyp=self.imagetypes['dark'], combined=True, include_path=True)
 
             exptimes: list[float] = []
@@ -494,14 +520,14 @@ class DataReduction():
                         raise RuntimeError(f"More than one master dark for the same exposure time are detected. Make sure that at most one file for each exposure time is available. The found files are {master_darks}")
                     else:
                         self.master_frames['dark'] = {exp_time:CCDData(file[0].data, unit='adu')}
-                        logger.info(f"One master dark with {exp_time} s exposure was detected and will be used.\nFilename: {dark}")
+                        logger.debug(f"One master dark with {exp_time} s exposure was detected and will be used.\nFilename: {dark}")
                         exptimes = list(self.master_frames['dark'].keys())
 
         # create a dictionary for better access
         self.ifc_reduced.refresh()
         self.master_frames['dark'] = {ccd.header['exptime']: ccd for ccd in self.ifc_reduced.ccds(imagetyp=self.imagetypes['dark'], combined=True)}
 
-        logger.info("Finished reduction of dark frames.")
+        logger.info("Finished reduction of dark frames.\n")
         return self.master_frames['dark']
 
     def reduce_flats(self, force_new_master: bool=False, keep_files: bool=False) -> dict[str, CCDData]:
@@ -513,7 +539,7 @@ class DataReduction():
 
         @return (dict) : dictionary with master flats. key=filter, value CCDData object
         """
-        logger.info("Starting reduction of flat frames.")
+        logger.info("Started reduction of flat frames.")
         # 1) check for existing
         if not self.check_master('flat') or force_new_master:
             # check necessary files
@@ -553,7 +579,7 @@ class DataReduction():
         
         # in all other cases there are already master flats
         else:
-            print("There is already a master flat.")
+            logger.info("One or more master flats were detected.")
             master_flats = self.ifc_reduced.files_filtered(imagetyp=self.imagetypes['flat'], combined=True, include_path=True)
             filters: list[str] = []
             for flat in master_flats:
@@ -565,18 +591,18 @@ class DataReduction():
                         raise RuntimeError(f"More than one master flat for the same filter are detected. Make shure that at most one file for each filter is available. The found files are {master_flats}")
                     else:
                         self.master_frames['flat'] = {used_filter:CCDData(file[0].data, unit='adu')}
-                        logger.info(f"One master flat for Filter {used_filter} was detected and will be used.\nFilename: {flat}")
+                        logger.debug(f"One master flat for filter {used_filter} was detected and will be used.\nFilename: {flat}")
         
         # create dictionary for better access
         self.ifc_reduced.refresh()
         self.master_frames['flat'] = {ccd.header['filter']: ccd for ccd in self.ifc_reduced.ccds(imagetyp=self.imagetypes['flat'], combined=True)}
 
-        logger.info("Finished reduction of flat frames.")
+        logger.info("Finished reduction of flat frames.\n")
         return self.master_frames['flat']
 
     def reduce_lights(self) -> None:
         """!Corrects the light frames. But does NOT create a master out of them"""
-        logger.info("Starting reduction of light frames.")
+        logger.info("Started reduction of light frames.")
         # ensure all necessary files are available
         if self.master_frames['bias'] == None:
             self.reduce_bias()
@@ -589,10 +615,9 @@ class DataReduction():
         for light, fname in self.ifc_raw.ccds(imagetyp=self.imagetypes['light'], return_fname=True):
             light = subtract_bias(light, self.master_frames['bias'])
             light = subtract_dark(light, self.best_dark(light.header['exptime']), exposure_time='exptime', exposure_unit=units.second, scale=True)
-            right_flat = self.master_frames['flat'][light.header['filter']]
-            light = flat_correct(light, right_flat)
+            light = flat_correct(light, self.master_frames['flat'][light.header['filter']])
             light.write(self.reduced_path / fname, overwrite=True)
-        logger.info("Finished reduction of light frames.")
+        logger.info("Finished reduction of light frames.\n")
 
     @classmethod
     def align_images(cls, filenames: list[str], alignment: str) -> list[CCDData]:
@@ -607,25 +632,25 @@ class DataReduction():
                 logger.info("No alignment will be used for combination.")
 
             case 'star1':
-                aligned = cls.align_astroalign(filenames)
                 logger.info("The frames will be aligned by the 'astroalign' library.")
+                aligned = cls.align_astroalign(filenames)
 
             case 'star2':
-                aligned = cls.align_simple(filenames)
                 logger.info("The frames will be aligned with one reference star selected by the user.")
+                aligned = cls.align_simple(filenames)
 
             case 'wcs':
-                logger.info("The frames will be aligned according to their WCS information from the headers.")
                 aligned = cls.align_wcs(filenames)
+                logger.info("The frames will be aligned according to their WCS information from the headers.")
 
             case _:
-                logger.error("Invalid alignemntmethod was given. Valid are 'none', 'star1', 'star2', and 'wcs' but '{alignment}' was given.")
+                logger.error(f"Invalid alignemntmethod was given. Valid are 'none', 'star1', 'star2', and 'wcs' but '{alignment}' was given.")
                 raise ValueError(f"Invalid alignement method! Valid values are 'none', 'star1', 'star2' and 'wcs' but '{alignment}' was given.")
 
         return aligned
         
 
-    def stack_light(self, alignment: str='none', filelist=None, out_names=None) -> None:
+    def stack_lights(self, alignment: str='none', filelist=None, out_names=None) -> None:
         """!
         Stacks the light frames and alignes them, if desired
         
@@ -637,6 +662,7 @@ class DataReduction():
         @example align_images([['obj1_1', 'obj1_2', 'obj1_3']], 'object_1')
         @example align_images([['obj1_1', 'obj1_2', 'obj1_3'],['obj2_1', 'obj2_2']], ['object_1', 'object_2'])
         """
+        logger.info("Started stacking of light frames.")
         self.ifc_reduced.refresh()
 
         if filelist == None:
@@ -648,26 +674,27 @@ class DataReduction():
 
             for obj in observed_objects:
                 for filt in used_filters:
-                    to_combine: list[str] = self.ifc_reduced.files_filtered(imagetyp=self.imagetypes['light'], filter=filt, object=obj, include_path=True)
+                    filenames: list[str] = self.ifc_reduced.files_filtered(imagetyp=self.imagetypes['light'], filter=filt, object=obj, include_path=True)
 
                     # for some combinations there might not be any files
-                    if len(to_combine) == 0:
+                    if len(filenames) == 0:
                         continue
 
                     # aligning the images
-                    to_combine = self.align_images(to_combine, alignment)
+                    to_combine = self.align_images(filenames, alignment)
                     
-                    self.__combine(to_combine, 'light', obj, filt)
+                    self.__combine(to_combine, 'light', obj, filt, filenames=filenames)
 
         else:
             # check length of input
             if len(filelist) == 1 and type(out_names) == str:
                 to_combine = self.align_images(filelist[0], alignment)
-                self.__combine(to_combine, 'light', out_names)
+                self.__combine(to_combine, 'light', out_names, filenames=filelist[0])
             elif len(filelist) == len(out_names):
                 for files, name in zip(filelist, out_names):
                     to_combine = self.align_images(files, alignment)
-                    self.__combine(to_combine, 'light', name)
+                    self.__combine(to_combine, 'light', name, filenames=files)
             else:
                 logger.error(f"The number of input filelists and output filenames does not match. You provided {len(filelist)} filelists and {len(out_names)} output filenames.")
                 raise ValueError(f"The provided filnames does not match the provided number of output filenames. You provided {len(filelist)} filelists and {len(out_names)}.")
+        logger.info("Finished stacking light frames.\n")
