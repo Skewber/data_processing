@@ -1,3 +1,4 @@
+from functools import lru_cache
 import logging
 import os
 import shutil
@@ -647,21 +648,14 @@ class DataReduction():
         if self.master_frames['flat'] == None:
             self.reduce_flats()
 
-        # correct the cosmics or not
-        if correct_cosmics:
-            self.cosmic_correct()
-            ifc = self.ifc_reduced
-            cosmics = 'corrected'
-        else:
-            ifc = self.ifc_raw
-            cosmics = None
-
         # correction of light frames
-            for light, fname in ifc.ccds(imagetyp=self.imagetypes['light'], cosmics=cosmics, return_fname=True):
-                light = subtract_bias(light, self.master_frames['bias'])
-                light = subtract_dark(light, self.best_dark(light.header['exptime']), exposure_time='exptime', exposure_unit=units.second, scale=True)
-                light = flat_correct(light, self.master_frames['flat'][light.header['filter']])
-                light.write(self.reduced_path / f"reduced_{fname}", overwrite=True)
+        for light, fname in self.ifc_raw.ccds(imagetyp=self.imagetypes['light'], return_fname=True):
+            if correct_cosmics:
+                self.cosmic_correct(data=light, fname=fname)
+            light = subtract_bias(light, self.master_frames['bias'])
+            light = subtract_dark(light, self.best_dark(light.header['exptime']), exposure_time='exptime', exposure_unit=units.second, scale=True)
+            light = flat_correct(light, self.master_frames['flat'][light.header['filter']])
+            light.write(self.reduced_path / f"reduced_{fname}", overwrite=True)
         logger.info("Finished reduction of light frames.\n")
 
     @classmethod
@@ -748,23 +742,65 @@ class DataReduction():
         logger.info("Finished stacking light frames.\n")
 
     @property
+    @lru_cache
     def readnoise(self):
         return np.mean([np.std(bias) for bias in self.ifc_raw.data(imagetyp=self.imagetypes['bias'])])
 
-    def cosmic_correct(self, niter=4):
-        logger.info("Started cosmic correction")
-        readnoise = self.readnoise
-        for hdu, fname in self.ifc_raw.hdus(imagetyp=self.imagetypes['light'], return_fname=True):
-            gain = hdu.header['egain']
-            satlevel = 2**(np.abs(hdu.header['bitpix']/2)) - 1
+    def cosmic_correct(self, data=None, niter=4, readnoise=None, save_cosmics=True, fname='.fits'):
+        """Removes cosmics from the image data.
 
-            hdu.data, cosmics = cosmicray_lacosmic(hdu.data, sigclip=4.5, sigfrac=0.3, objlim=5.0,
+        :param data: data to remove cosmics on. If 'None' every registerd light will be corrected and saved as a new file, defaults to None
+        :type data: CCDData, optional
+        :param niter: number of iterations to perform the L.A. cosmic algorithm, defaults to 4
+        :type niter: int, optional
+        :param readnoise: Value for the readnoise, if not given it will be calculated from the registered bias frames, defaults to None
+        :type readnoise: float, optional
+        :param save_cosmics: Whether or not the detected cosmics sould be saved as an additional image, defaults to True
+        :type save_cosmics: bool, optional
+        :param fname: name of the image file to save the cosmic corrected image, defaults to '.fits'
+        :type fname: str, optional
+        :raises ValueError: if 'data' is nether None nor a CCDData object.
+        :return: None if 'data' is None, otherwise the data without the cosmics
+        :rtype: CCDData
+        """
+        if readnoise==None:
+            readnoise = self.readnoise
+
+        if data==None:
+            logger.info("Started cosmic correction")
+            for hdu, fname in self.ifc_raw.hdus(imagetyp=self.imagetypes['light'], return_fname=True):
+                gain = hdu.header['egain']
+                satlevel = 2**(np.abs(hdu.header['bitpix']/2)) - 1
+
+                hdu.data, cosmics = cosmicray_lacosmic(hdu.data, sigclip=4.5, sigfrac=0.3, objlim=5.0,
+                                                        gain=gain, readnoise=readnoise, satlevel=satlevel,
+                                                        niter=niter, cleantype='meanmask', fsmode='median',
+                                                        gain_apply=False)
+                
+                hdu.header['cosmics'] = 'corrected'
+                if save_cosmics:
+                    fits.HDUList([fits.PrimaryHDU(data=cosmics*1)]).writeto(Path('.', self.reduced_path, f"cosmics_{fname}"), overwrite=True)
+                # TODO: make name to '*cosmics.fits
+                hdu.writeto(Path('.', self.reduced_path, f"coscorr_{fname}"), overwrite=True)
+            logger.info("Finished cosmic correction")
+
+        elif type(data)==CCDData:
+            gain = data.header['egain']
+            satlevel = 2**(np.abs(data.header['bitpix']/2)) - 1
+
+            data.data, cosmics = cosmicray_lacosmic(data.data, sigclip=4.5, sigfrac=0.3, objlim=5.0,
                                                     gain=gain, readnoise=readnoise, satlevel=satlevel,
                                                     niter=niter, cleantype='meanmask', fsmode='median',
                                                     gain_apply=False)
             
-            hdu.header['cosmics'] = 'corrected'
-            fits.HDUList([fits.PrimaryHDU(data=cosmics*1)]).writeto(Path('.', self.reduced_path, f"cosmics_{fname}"), overwrite=True)
+            data.header['cosmics'] = 'corrected'
+            if save_cosmics:
+                fits.HDUList([fits.PrimaryHDU(data=cosmics*1)]).writeto(Path('.', self.reduced_path, f"cosmics_{fname}"), overwrite=True)
             # TODO: make name to '*cosmics.fits
-            hdu.writeto(Path('.', self.reduced_path, f"coscorr_{fname}"), overwrite=True)
-        logger.info("Finished cosmic correction")
+            
+        else:
+            message = f"You provided an invalid type for 'data' to perform cosmic correction on. You provided '{type(data)}'."
+            logger.error(message)
+            raise ValueError(message)
+
+        return data
