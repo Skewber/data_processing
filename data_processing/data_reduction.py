@@ -1,4 +1,6 @@
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 from functools import lru_cache
+from itertools import combinations
 import logging
 import os
 import shutil
@@ -97,6 +99,7 @@ class DataReduction():
         :return: dictionary of headerkeywords for bias, dark, flat and lightframes
         :rtype: dict[str,str]
         """
+        # TODO: determine imagetypes from image statistics rather than header keywords
         imagetypes: dict[str, str] = {'bias':'', 'dark':'', 'flat':'', 'light':''}
         
         keys = imagetypes.keys()
@@ -111,13 +114,11 @@ class DataReduction():
 
             # set names for imagetype
             img_type: str = hdu.header['imagetyp']
-            # FIXME: try to remove nesting
             if not img_type in frame_names:
                 for key in keys:
-                    if key.lower() in img_type.lower():
-                        imagetypes[key] = img_type
+                    imagetypes[key] = img_type if key.lower() in img_type.lower() else imagetypes[key]
         logger.debug("Added keyword 'BUNIT' with the value 'adu' to each header.")
-        logger.debug("Image types were detected from the headers.")
+        logger.debug(f"Image types were detected from the headers.\n{imagetypes}")
         # raise an error if for at least one type ther is no name found
         if '' in frame_names:
             message = f"No name for the imagetype was detected for at least one imagetype. The following types are determined:\n{imagetypes}.\nCheck your data again."
@@ -211,6 +212,7 @@ class DataReduction():
         :return: list of all aligned images.
         :rtype: list[CCDData]
         """
+        logger.debug("Started aligning images with 'astroalign'.")
         # the first image is the target
         # all others will be aligned to this one
         with fits.open(to_combine[0]) as file:
@@ -222,11 +224,12 @@ class DataReduction():
             registered_img = CCDData(aa.register(source=source, target=target,
                                                 max_control_points=50, detection_sigma=5)[0],
                                                 unit='adu')
-            logger.debug(f"{img} aligned successfully")
             return registered_img
 
-        aligned: list[CCDData] = [align_img(img, target) for img in to_combine]
-
+        with ProcessPoolExecutor() as executor:
+            aligned: list[CCDData] = list(executor.map(lambda img: align_img(img, target), to_combine))
+        # aligned: list[CCDData] = [align_img(img, target) for img in to_combine]
+        logger.debug("Finished aligning")
         return aligned
 
     @staticmethod
@@ -273,13 +276,11 @@ class DataReduction():
             ax.imshow(data, cmap='Greys', norm=LogNorm(vmin=0.0001))
 
             x, y = 0, 0
-
             # connect the event handling to allow the interaction with the mouse
             cid = fig.canvas.mpl_connect('button_press_event', onclick)
             plt.show()
 
             fig.canvas.mpl_disconnect(cid)
-
             return x, y
 
         # helping function to determine the limits for a cutout
@@ -460,8 +461,8 @@ class DataReduction():
 
             # remove all single calibrate bias frames
             if not keep_files:
-                for file in reduced_biases:
-                    os.remove(Path('.', file))
+                with ThreadPoolExecutor() as executor:
+                    executor.map(lambda file: os.remove(Path('.', file)), reduced_biases)
 
         # in all other cases there is already a master bias that can be used
         else:
@@ -502,9 +503,11 @@ class DataReduction():
             dark_times: set[float] = set(h['exptime'] for h in self.ifc_raw.headers(imagetyp=self.imagetypes['dark']))
 
             # 2) reduce the dark frames
-            for ccd, fname in self.ifc_raw.ccds(imagetyp=self.imagetypes['dark'], return_fname=True):
+            def correct(ccd, fname):
                 ccd = subtract_bias(ccd, self.master_frames['bias'])
                 ccd.write(self.reduced_path / fname, overwrite=True)
+            with ThreadPoolExecutor() as executor:
+                executor.map(lambda args: correct(*args), self.ifc_raw.ccds(imagetyp=self.imagetypes['dark'], return_fname=True))
 
             # 3) stack the frames and use dict for different exp times
             self.ifc_reduced.refresh()
@@ -523,7 +526,9 @@ class DataReduction():
             reduced_darks = self.__rm_master(reduced_darks)
 
             if not keep_files:
-                [os.remove(Path('.', file)) for file in reduced_darks]
+                # [os.remove(Path('.', file)) for file in reduced_darks]
+                with ThreadPoolExecutor() as executor:
+                    executor.map(lambda file: os.remove(Path('.', file)), reduced_darks)
                 logger.info("Removed all reduced dark frame files.")
 
         # in all other cases there is already a master dark that can be used
@@ -576,11 +581,14 @@ class DataReduction():
                 self.reduce_darks(force_new_master, keep_files)
         
         # 2) calibrate the flat frames
-            for hdu, fname in self.ifc_raw.hdus(imagetyp=self.imagetypes['flat'], return_fname=True):
+                # ccd.write(self.reduced_path / fname, overwrite=True)
+            def correct(hdu, fname):
                 ccd = CCDData(hdu.data, meta=hdu.header, unit='adu')
                 ccd = subtract_bias(ccd, self.master_frames['bias'])
                 ccd = subtract_dark(ccd, self.best_dark(hdu.header['exptime']), exposure_time='exptime', exposure_unit=units.second, scale=True)
                 ccd.write(self.reduced_path / fname, overwrite=True)
+            with ThreadPoolExecutor() as executor:
+                executor.map(lambda args: correct(*args), self.ifc_raw.hdus(imagetyp=self.imagetypes['flat'], return_fname=True))
                 
         # 3) stack them
             self.ifc_reduced.refresh()
@@ -601,7 +609,9 @@ class DataReduction():
             reduced_flats: list[str] = self.ifc_reduced.files_filtered(imagetyp=self.imagetypes['flat'], include_path=True)
             reduced_flats = self.__rm_master(reduced_flats)
             if not keep_files:
-                [os.remove(file) for file in reduced_flats]
+                # [os.remove(file) for file in reduced_flats]
+                with ThreadPoolExecutor() as executor:
+                    executor.map(lambda file: os.remove(file), reduced_flats)
                 logger.info("Removed all reduced flat frame files.")
         
         # in all other cases there are already master flats
@@ -649,13 +659,16 @@ class DataReduction():
             self.reduce_flats()
 
         # correction of light frames
-        for light, fname in self.ifc_raw.ccds(imagetyp=self.imagetypes['light'], return_fname=True):
-            if correct_cosmics:
+        def correct(light, fname, corr_cos):
+            if corr_cos:
                 self.cosmic_correct(data=light, fname=fname)
             light = subtract_bias(light, self.master_frames['bias'])
             light = subtract_dark(light, self.best_dark(light.header['exptime']), exposure_time='exptime', exposure_unit=units.second, scale=True)
             light = flat_correct(light, self.master_frames['flat'][light.header['filter']])
             light.write(self.reduced_path / f"reduced_{fname}", overwrite=True)
+        with ThreadPoolExecutor() as executor:
+            executor.map(lambda args: correct(*args, correct_cosmics), self.ifc_raw.ccds(imagetyp=self.imagetypes['light'], return_fname=True))
+
         logger.info("Finished reduction of light frames.\n")
 
     @classmethod
@@ -745,12 +758,41 @@ class DataReduction():
     @lru_cache
     def readnoise(self):
         return np.mean([np.std(bias) for bias in self.ifc_raw.data(imagetyp=self.imagetypes['bias'])])
+    
+    @property
+    @lru_cache
+    def gain_estimate(self):
+        logger.info("Started gain estimation.")
+        if self.master_frames['bias'] == None:
+            self.reduce_bias()
+        
+        gains = []
+        for flat1, flat2 in combinations(self.ifc_raw.data(imagetyp=self.imagetypes['flat']), 2):
+            diff = flat1 - flat2
+            xcenter, ycenter = [x//4 for x in flat1.shape]
+            # std from central 100x100 pixels
+            variance = np.std(diff[xcenter:3*xcenter, ycenter:3*ycenter])**2 / 2
+            # subtract bias from both frames
+            corrected1 = flat1 - self.master_frames['bias']
+            corrected2 = flat2 - self.master_frames['bias']
+            # mean from central 100x100 pixels
+            mean1 = np.mean(corrected1[xcenter:3*xcenter, ycenter:3*ycenter])
+            mean2 = np.mean(corrected2[xcenter:3*xcenter, ycenter:3*ycenter])
+            # i actually don't know exactly why this is the gain now \_(°_°)_/
+            # https://www.photometrics.com/learn/imaging-topics/gain
+            gains.append(mean1/variance)
+            gains.append(mean2/variance)
+        gain = np.mean(gains)
+        logger.debug(f"Estimated the gain of the data to: {gain} e/ADU")
+        return gain
 
-    def cosmic_correct(self, data=None, niter=4, readnoise=None, save_cosmics=True, fname='.fits'):
+    def cosmic_correct(self, data=None, gain=None, niter=4, readnoise=None, save_cosmics=True, fname='.fits'):
         """Removes cosmics from the image data.
 
         :param data: data to remove cosmics on. If 'None' every registerd light will be corrected and saved as a new file, defaults to None
         :type data: CCDData, optional
+        :param gain: value of the gain of the data. If None than the gain will be read from the header. If there is no entry for 'EGAIN' the gain will be estimated using the registered flat frames.
+        :type gain: float, optional
         :param niter: number of iterations to perform the L.A. cosmic algorithm, defaults to 4
         :type niter: int, optional
         :param readnoise: Value for the readnoise, if not given it will be calculated from the registered bias frames, defaults to None
@@ -759,7 +801,7 @@ class DataReduction():
         :type save_cosmics: bool, optional
         :param fname: name of the image file to save the cosmic corrected image, defaults to '.fits'
         :type fname: str, optional
-        :raises ValueError: if 'data' is nether None nor a CCDData object.
+        :raises ValueError: if 'data' is neither None nor a CCDData object.
         :return: None if 'data' is None, otherwise the data without the cosmics
         :rtype: CCDData
         """
@@ -768,24 +810,38 @@ class DataReduction():
 
         if data==None:
             logger.info("Started cosmic correction")
-            for hdu, fname in self.ifc_raw.hdus(imagetyp=self.imagetypes['light'], return_fname=True):
-                gain = hdu.header['egain']
+            def correct(hdu, fname, gain, save_cosmics):
+                if gain == None:
+                    try:
+                        gain = hdu.header['egain']
+                        # not sure if this statement is necessarily true
+                        gain = gain if gain >= 1 else 1/gain
+                    except KeyError:
+                        gain = self.gain_estimate
+                else:
+                    gain = 1.
+                # determine the saturation level
                 satlevel = 2**(np.abs(hdu.header['bitpix']/2)) - 1
 
                 hdu.data, cosmics = cosmicray_lacosmic(hdu.data, sigclip=4.5, sigfrac=0.3, objlim=5.0,
                                                         gain=gain, readnoise=readnoise, satlevel=satlevel,
                                                         niter=niter, cleantype='meanmask', fsmode='median',
                                                         gain_apply=False)
-                
                 hdu.header['cosmics'] = 'corrected'
                 if save_cosmics:
                     fits.HDUList([fits.PrimaryHDU(data=cosmics*1)]).writeto(Path('.', self.reduced_path, f"cosmics_{fname}"), overwrite=True)
-                # TODO: make name to '*cosmics.fits
                 hdu.writeto(Path('.', self.reduced_path, f"coscorr_{fname}"), overwrite=True)
+            with ThreadPoolExecutor() as executer:
+                executer.map(lambda args: correct(*args, gain, save_cosmics), self.ifc_raw.hdus(imagetyp=self.imagetypes['light'], return_fname=True))
             logger.info("Finished cosmic correction")
 
         elif type(data)==CCDData:
-            gain = data.header['egain']
+            try:
+                gain = data.header['egain']
+                gain = gain if gain >= 1 else 1/gain
+            except KeyError:
+                gain = self.gain_estimate
+
             satlevel = 2**(np.abs(data.header['bitpix']/2)) - 1
 
             data.data, cosmics = cosmicray_lacosmic(data.data, sigclip=4.5, sigfrac=0.3, objlim=5.0,
@@ -796,7 +852,6 @@ class DataReduction():
             data.header['cosmics'] = 'corrected'
             if save_cosmics:
                 fits.HDUList([fits.PrimaryHDU(data=cosmics*1)]).writeto(Path('.', self.reduced_path, f"cosmics_{fname}"), overwrite=True)
-            # TODO: make name to '*cosmics.fits
             
         else:
             message = f"You provided an invalid type for 'data' to perform cosmic correction on. You provided '{type(data)}'."
