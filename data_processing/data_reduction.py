@@ -228,7 +228,6 @@ class DataReduction():
 
         with ProcessPoolExecutor() as executor:
             aligned: list[CCDData] = list(executor.map(lambda img: align_img(img, target), to_combine))
-        # aligned: list[CCDData] = [align_img(img, target) for img in to_combine]
         logger.debug("Finished aligning")
         return aligned
 
@@ -446,8 +445,8 @@ class DataReduction():
             biases: list[str] = self.ifc_raw.files_filtered(imagetyp=self.imagetypes['bias'], include_path=True)
 
             # copy the biasframes to the folder with calibrated data
-            for bias in biases:
-                shutil.copy(bias, self.reduced_path)
+            with ThreadPoolExecutor() as executor:
+                executor.map(lambda file: shutil.copy(file, self.reduced_path), biases)
 
             # stack them to a master bias
             self.ifc_reduced.refresh()
@@ -526,7 +525,6 @@ class DataReduction():
             reduced_darks = self.__rm_master(reduced_darks)
 
             if not keep_files:
-                # [os.remove(Path('.', file)) for file in reduced_darks]
                 with ThreadPoolExecutor() as executor:
                     executor.map(lambda file: os.remove(Path('.', file)), reduced_darks)
                 logger.info("Removed all reduced dark frame files.")
@@ -609,7 +607,6 @@ class DataReduction():
             reduced_flats: list[str] = self.ifc_reduced.files_filtered(imagetyp=self.imagetypes['flat'], include_path=True)
             reduced_flats = self.__rm_master(reduced_flats)
             if not keep_files:
-                # [os.remove(file) for file in reduced_flats]
                 with ThreadPoolExecutor() as executor:
                     executor.map(lambda file: os.remove(file), reduced_flats)
                 logger.info("Removed all reduced flat frame files.")
