@@ -165,6 +165,11 @@ class DataReduction():
                             sigma_clip_func=np.ma.median, sigma_clip_dev_func=mad_std,
                             mem_limit=mem_lim)
         
+        if type(to_combine[0]) == CCDData:
+            master.header = to_combine[0].header
+        else:
+            with fits.open(to_combine[0]) as hdul:
+                master.header = hdul[0].header
         # adding an entry to the header
         master.meta['nframes'] = len(to_combine)
         master.meta['combined'] = True
