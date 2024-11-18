@@ -1,0 +1,1003 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../../">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>data_processing.data_reduction &mdash; Data Reduction 0.1 documentation</title>
+      <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=80d5e7a1" />
+      <link rel="stylesheet" type="text/css" href="../../_static/css/theme.css?v=e59714d7" />
+
+  
+      <script src="../../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../../_static/documentation_options.js?v=2709fde1"></script>
+      <script src="../../_static/doctools.js?v=9bcbadda"></script>
+      <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../../index.html" class="icon icon-home">
+            Data Reduction
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../modules.html">data_processing</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../index.html">Data Reduction</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../index.html">Module code</a></li>
+      <li class="breadcrumb-item active">data_processing.data_reduction</li>
+      <li class="wy-breadcrumbs-aside">
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <h1>Source code for data_processing.data_reduction</h1><div class="highlight"><pre>
+<span></span><span class="kn">from</span> <span class="nn">concurrent.futures</span> <span class="kn">import</span> <span class="n">ThreadPoolExecutor</span><span class="p">,</span> <span class="n">ProcessPoolExecutor</span>
+<span class="kn">from</span> <span class="nn">functools</span> <span class="kn">import</span> <span class="n">lru_cache</span>
+<span class="kn">from</span> <span class="nn">itertools</span> <span class="kn">import</span> <span class="n">combinations</span>
+<span class="kn">import</span> <span class="nn">logging</span>
+<span class="kn">import</span> <span class="nn">os</span>
+<span class="kn">import</span> <span class="nn">shutil</span>
+<span class="kn">from</span> <span class="nn">pathlib</span> <span class="kn">import</span> <span class="n">Path</span>
+<span class="kn">from</span> <span class="nn">warnings</span> <span class="kn">import</span> <span class="n">filterwarnings</span>
+
+<span class="kn">import</span> <span class="nn">matplotlib.pyplot</span> <span class="k">as</span> <span class="nn">plt</span>
+<span class="kn">from</span> <span class="nn">matplotlib.colors</span> <span class="kn">import</span> <span class="n">LogNorm</span>
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">from</span> <span class="nn">scipy.ndimage</span> <span class="kn">import</span> <span class="n">median_filter</span><span class="p">,</span> <span class="n">shift</span>
+
+<span class="kn">import</span> <span class="nn">astroalign</span> <span class="k">as</span> <span class="nn">aa</span>
+<span class="kn">from</span> <span class="nn">astropy</span> <span class="kn">import</span> <span class="n">units</span>
+<span class="kn">from</span> <span class="nn">astropy.io</span> <span class="kn">import</span> <span class="n">fits</span>
+<span class="kn">from</span> <span class="nn">astropy.nddata</span> <span class="kn">import</span> <span class="n">CCDData</span>
+<span class="kn">from</span> <span class="nn">astropy.stats</span> <span class="kn">import</span> <span class="n">mad_std</span>
+<span class="kn">from</span> <span class="nn">astropy.wcs</span> <span class="kn">import</span> <span class="n">WCS</span>
+<span class="kn">from</span> <span class="nn">ccdproc</span> <span class="kn">import</span> <span class="p">(</span><span class="n">ImageFileCollection</span><span class="p">,</span> <span class="n">combine</span><span class="p">,</span> <span class="n">subtract_bias</span><span class="p">,</span>
+                     <span class="n">subtract_dark</span><span class="p">,</span> <span class="n">flat_correct</span><span class="p">,</span> <span class="n">wcs_project</span><span class="p">,</span> 
+                     <span class="n">cosmicray_lacosmic</span><span class="p">)</span>
+
+<span class="c1"># FIXME: do not ignore all warnings</span>
+<span class="n">filterwarnings</span><span class="p">(</span><span class="n">action</span><span class="o">=</span><span class="s2">&quot;ignore&quot;</span><span class="p">,</span> <span class="n">module</span><span class="o">=</span><span class="s2">&quot;ccdproc&quot;</span><span class="p">)</span>
+<span class="n">filterwarnings</span><span class="p">(</span><span class="n">action</span><span class="o">=</span><span class="s2">&quot;ignore&quot;</span><span class="p">,</span> <span class="n">module</span><span class="o">=</span><span class="s2">&quot;astropy&quot;</span><span class="p">)</span>
+
+<span class="n">logger</span> <span class="o">=</span> <span class="n">logging</span><span class="o">.</span><span class="n">getLogger</span><span class="p">(</span><span class="s2">&quot;data_reduction&quot;</span><span class="p">)</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">propagate</span> <span class="o">=</span> <span class="kc">False</span>
+
+<span class="c1"># TODO: Check if the necessary entries in the header exist</span>
+<div class="viewcode-block" id="DataReduction">
+<a class="viewcode-back" href="../../data_processing.html#data_processing.data_reduction.DataReduction">[docs]</a>
+<span class="k">class</span> <span class="nc">DataReduction</span><span class="p">():</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Basic class for Data Reduction. For this class to work properly the used .fits files need the following keywords in the header: &#39;EXPTIME&#39;, &#39;FILTER&#39;, &#39;OBJECT&#39;. Optionally it can also contain wcs informations if an alignment of those is desired. If not provided the alignemt can also be done by matching stars in the image.\n</span>
+<span class="sd">    If the status informations should be tracked a logger with the name &#39;data_reduction&#39; should be defined. If this logger is not defined in advance, a basic console logger will be used.</span>
+
+<span class="sd">    :param foldername_data: Name of the folder with the raw data that should be processed.</span>
+<span class="sd">    :type foldername_data: str</span>
+<span class="sd">    :param foldername_reduced: Name of the folder where the reduced data should be stored. If it does not exist, this folder will be created. Defaults to &quot;reduced_data&quot;</span>
+<span class="sd">    :type foldername_reduced: str, optional</span>
+<span class="sd">    :param bias: Keyword in the headers for bias frames, defaults to &#39;&#39;</span>
+<span class="sd">    :type bias: str, optional</span>
+<span class="sd">    :param dark: Keyword in the headers for dark frames, defaults to &#39;&#39;</span>
+<span class="sd">    :type dark: str, optional</span>
+<span class="sd">    :param flat: Keyword in the headers for flat frames, defaults to &#39;&#39;</span>
+<span class="sd">    :type flat: str, optional</span>
+<span class="sd">    :param light: Keyword in the headers for light frames, defaults to &#39;&#39;</span>
+<span class="sd">    :type light: str, optional</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">foldername_data</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">foldername_reduced</span><span class="p">:</span> <span class="nb">str</span><span class="o">=</span><span class="s2">&quot;reduced_data&quot;</span><span class="p">,</span> <span class="n">bias</span><span class="o">=</span><span class="s1">&#39;&#39;</span><span class="p">,</span> <span class="n">dark</span><span class="o">=</span><span class="s1">&#39;&#39;</span><span class="p">,</span> <span class="n">flat</span><span class="o">=</span><span class="s1">&#39;&#39;</span><span class="p">,</span> <span class="n">light</span><span class="o">=</span><span class="s1">&#39;&#39;</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;constructor method</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># setup for a console handler if there are none</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">logger</span><span class="o">.</span><span class="n">hasHandlers</span><span class="p">():</span>
+            <span class="n">logger</span><span class="o">.</span><span class="n">setLevel</span><span class="p">(</span><span class="n">logging</span><span class="o">.</span><span class="n">INFO</span><span class="p">)</span>
+            <span class="n">console_handler</span> <span class="o">=</span> <span class="n">logging</span><span class="o">.</span><span class="n">StreamHandler</span><span class="p">()</span>
+            <span class="n">console_handler</span><span class="o">.</span><span class="n">setLevel</span><span class="p">(</span><span class="n">logging</span><span class="o">.</span><span class="n">INFO</span><span class="p">)</span>
+            <span class="n">console_handler</span><span class="o">.</span><span class="n">setFormatter</span><span class="p">(</span><span class="n">logging</span><span class="o">.</span><span class="n">Formatter</span><span class="p">(</span><span class="s1">&#39;</span><span class="si">%(levelname)s</span><span class="s1"> - </span><span class="si">%(message)s</span><span class="s1">&#39;</span><span class="p">,</span> <span class="n">style</span><span class="o">=</span><span class="s1">&#39;%&#39;</span><span class="p">))</span>
+            <span class="n">logger</span><span class="o">.</span><span class="n">addHandler</span><span class="p">(</span><span class="n">console_handler</span><span class="p">)</span>
+        <span class="c1"># set up for raw data path</span>
+        <span class="c1">## Path to the raw data</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">raw_path</span><span class="p">:</span> <span class="n">Path</span> <span class="o">=</span> <span class="n">Path</span><span class="p">(</span><span class="s1">&#39;.&#39;</span><span class="p">,</span> <span class="n">foldername_data</span><span class="p">)</span>
+        <span class="c1">## Collection of all images that are stored in the raw data path</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">ifc_raw</span><span class="p">:</span> <span class="n">ImageFileCollection</span> <span class="o">=</span> <span class="n">ImageFileCollection</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">raw_path</span><span class="p">)</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s1">&#39;Detected </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">ifc_raw</span><span class="o">.</span><span class="n">files</span><span class="p">)</span><span class="si">}</span><span class="s1"> files in the raw data directory.&#39;</span><span class="p">)</span>
+
+        <span class="c1"># set up for reduced data path</span>
+        <span class="c1">## Path to the reduced data, which will be created if it does not exist</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">reduced_path</span><span class="p">:</span> <span class="n">Path</span> <span class="o">=</span> <span class="n">Path</span><span class="p">(</span><span class="s1">&#39;.&#39;</span><span class="p">,</span> <span class="n">foldername_reduced</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">reduced_path</span><span class="o">.</span><span class="n">mkdir</span><span class="p">(</span><span class="n">exist_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="c1">## Collection of all images that are allready in the reduced folder</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">ifc_reduced</span><span class="p">:</span> <span class="n">ImageFileCollection</span> <span class="o">=</span> <span class="n">ImageFileCollection</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">reduced_path</span><span class="p">)</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s1">&#39;Detected </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">ifc_reduced</span><span class="o">.</span><span class="n">files</span><span class="p">)</span><span class="si">}</span><span class="s1"> files in the reduced data directory.&#39;</span><span class="p">)</span>
+
+        <span class="c1"># check if all framenames are provided</span>
+        <span class="k">if</span> <span class="n">bias</span><span class="o">==</span><span class="s1">&#39;&#39;</span> <span class="ow">or</span> <span class="n">dark</span><span class="o">==</span><span class="s1">&#39;&#39;</span> <span class="ow">or</span> <span class="n">flat</span><span class="o">==</span><span class="s1">&#39;&#39;</span> <span class="ow">or</span> <span class="n">light</span><span class="o">==</span><span class="s1">&#39;&#39;</span><span class="p">:</span>
+            <span class="c1">## Defines the keywords in the header of the used fits files</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">imagetypes</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">__get_framenames</span><span class="p">(</span><span class="n">foldername_data</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">imagetypes</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;bias&#39;</span><span class="p">:</span><span class="n">bias</span><span class="p">,</span> <span class="s1">&#39;dark&#39;</span><span class="p">:</span><span class="n">dark</span><span class="p">,</span> <span class="s1">&#39;flat&#39;</span><span class="p">:</span><span class="n">flat</span><span class="p">,</span> <span class="s1">&#39;light&#39;</span><span class="p">:</span><span class="n">light</span><span class="p">}</span>
+            <span class="k">for</span> <span class="n">hdu</span><span class="p">,</span> <span class="n">fname</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">ifc_raw</span><span class="o">.</span><span class="n">hdus</span><span class="p">(</span><span class="n">return_fname</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+                <span class="c1"># FIXME: There might be a different unit. Which will be overwritten by this.</span>
+                <span class="c1"># add &#39;bunit&#39; to every header. Needed later on</span>
+                <span class="n">hdu</span><span class="o">.</span><span class="n">header</span><span class="p">[</span><span class="s1">&#39;bunit&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="s1">&#39;adu&#39;</span>
+                <span class="n">hdu</span><span class="o">.</span><span class="n">writeto</span><span class="p">(</span><span class="n">Path</span><span class="p">(</span><span class="s1">&#39;.&#39;</span><span class="p">,</span> <span class="n">foldername_data</span><span class="p">,</span> <span class="n">fname</span><span class="p">),</span> <span class="n">overwrite</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+            <span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Added keyword &#39;BUNIT&#39; with the value &#39;adu&#39; to each header.&quot;</span><span class="p">)</span>
+
+        <span class="c1"># set up dict for masters</span>
+        <span class="c1">## Dictionary to store the master frames for a more convenient access</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">master_frames</span><span class="p">:</span> <span class="nb">dict</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;bias&#39;</span><span class="p">:</span><span class="kc">None</span><span class="p">,</span> <span class="s1">&#39;dark&#39;</span><span class="p">:</span><span class="kc">None</span><span class="p">,</span> <span class="s1">&#39;flat&#39;</span><span class="p">:</span><span class="kc">None</span><span class="p">,</span> <span class="s1">&#39;light&#39;</span><span class="p">:</span><span class="kc">None</span><span class="p">}</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Finished setup.</span><span class="se">\n</span><span class="s2">&quot;</span><span class="p">)</span>
+    
+    <span class="k">def</span> <span class="nf">__get_framenames</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">foldername_data</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Determines the headerkeywords for bias, dark, flat and lightframes from the header of the given files.</span>
+
+<span class="sd">        :param foldername_data: Name of the folder with the data</span>
+<span class="sd">        :type foldername_data: str</span>
+<span class="sd">        :raises ValueError: raises ValueError if for at least one frametyp no headerkeyword could be found</span>
+<span class="sd">        :return: dictionary of headerkeywords for bias, dark, flat and lightframes</span>
+<span class="sd">        :rtype: dict[str,str]</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># TODO: determine imagetypes from image statistics rather than header keywords</span>
+        <span class="n">imagetypes</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;bias&#39;</span><span class="p">:</span><span class="s1">&#39;&#39;</span><span class="p">,</span> <span class="s1">&#39;dark&#39;</span><span class="p">:</span><span class="s1">&#39;&#39;</span><span class="p">,</span> <span class="s1">&#39;flat&#39;</span><span class="p">:</span><span class="s1">&#39;&#39;</span><span class="p">,</span> <span class="s1">&#39;light&#39;</span><span class="p">:</span><span class="s1">&#39;&#39;</span><span class="p">}</span>
+        
+        <span class="n">keys</span> <span class="o">=</span> <span class="n">imagetypes</span><span class="o">.</span><span class="n">keys</span><span class="p">()</span>
+        <span class="n">frame_names</span> <span class="o">=</span> <span class="n">imagetypes</span><span class="o">.</span><span class="n">values</span><span class="p">()</span>
+
+        <span class="c1">## determine the strings that specify the imagetype</span>
+        <span class="k">for</span> <span class="n">hdu</span><span class="p">,</span> <span class="n">fname</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">ifc_raw</span><span class="o">.</span><span class="n">hdus</span><span class="p">(</span><span class="n">return_fname</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+            <span class="c1"># FIXME: There might be a different unit. Which will be overwritten by this.</span>
+            <span class="c1"># add &#39;bunit&#39; to every header. Needed later on</span>
+            <span class="n">hdu</span><span class="o">.</span><span class="n">header</span><span class="p">[</span><span class="s1">&#39;bunit&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="s1">&#39;adu&#39;</span>
+            <span class="n">hdu</span><span class="o">.</span><span class="n">writeto</span><span class="p">(</span><span class="n">Path</span><span class="p">(</span><span class="s1">&#39;.&#39;</span><span class="p">,</span> <span class="n">foldername_data</span><span class="p">,</span> <span class="n">fname</span><span class="p">),</span> <span class="n">overwrite</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+            <span class="c1"># set names for imagetype</span>
+            <span class="n">img_type</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="n">hdu</span><span class="o">.</span><span class="n">header</span><span class="p">[</span><span class="s1">&#39;imagetyp&#39;</span><span class="p">]</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="n">img_type</span> <span class="ow">in</span> <span class="n">frame_names</span><span class="p">:</span>
+                <span class="k">for</span> <span class="n">key</span> <span class="ow">in</span> <span class="n">keys</span><span class="p">:</span>
+                    <span class="n">imagetypes</span><span class="p">[</span><span class="n">key</span><span class="p">]</span> <span class="o">=</span> <span class="n">img_type</span> <span class="k">if</span> <span class="n">key</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span> <span class="ow">in</span> <span class="n">img_type</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span> <span class="k">else</span> <span class="n">imagetypes</span><span class="p">[</span><span class="n">key</span><span class="p">]</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Added keyword &#39;BUNIT&#39; with the value &#39;adu&#39; to each header.&quot;</span><span class="p">)</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Image types were detected from the headers.</span><span class="se">\n</span><span class="si">{</span><span class="n">imagetypes</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="c1"># raise an error if for at least one type ther is no name found</span>
+        <span class="k">if</span> <span class="s1">&#39;&#39;</span> <span class="ow">in</span> <span class="n">frame_names</span><span class="p">:</span>
+            <span class="n">message</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;No name for the imagetype was detected for at least one imagetype. The following types are determined:</span><span class="se">\n</span><span class="si">{</span><span class="n">imagetypes</span><span class="si">}</span><span class="s2">.</span><span class="se">\n</span><span class="s2">Check your data again.&quot;</span>
+            <span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="n">message</span><span class="p">)</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="n">message</span><span class="p">)</span>
+        
+        <span class="k">return</span> <span class="n">imagetypes</span>
+
+    <span class="k">def</span> <span class="nf">__combine</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">to_combine</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">CCDData</span> <span class="o">|</span> <span class="nb">str</span><span class="p">],</span> <span class="n">frame</span><span class="p">:</span> <span class="nb">str</span><span class="o">=</span><span class="s1">&#39;frame&#39;</span><span class="p">,</span> <span class="n">obj</span><span class="p">:</span> <span class="nb">str</span><span class="o">=</span><span class="s1">&#39;&#39;</span><span class="p">,</span> <span class="n">filt</span><span class="p">:</span> <span class="nb">str</span><span class="o">=</span><span class="s1">&#39;&#39;</span><span class="p">,</span> <span class="n">exposure</span><span class="p">:</span> <span class="nb">str</span><span class="o">=</span><span class="s1">&#39;&#39;</span><span class="p">,</span> <span class="n">mem_lim</span><span class="p">:</span> <span class="nb">float</span><span class="o">=</span><span class="mf">8e9</span><span class="p">,</span> <span class="n">filenames</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">CCDData</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Combines the given images.</span>
+
+<span class="sd">        :param to_combine: Data that will be stacked</span>
+<span class="sd">        :type to_combine: list[CCDData  |  str]</span>
+<span class="sd">        :param frame: Name of the frame that is stacked (bias, dark, flat, light), defaults to &#39;frame&#39;</span>
+<span class="sd">        :type frame: str, optional</span>
+<span class="sd">        :param obj: Name of the object in the image, defaults to &#39;&#39;</span>
+<span class="sd">        :type obj: str, optional</span>
+<span class="sd">        :param filt: Name of the used filter, defaults to &#39;&#39;</span>
+<span class="sd">        :type filt: str, optional</span>
+<span class="sd">        :param exposure: Value of the exposure, defaults to &#39;&#39;</span>
+<span class="sd">        :type exposure: str, optional</span>
+<span class="sd">        :param mem_lim: Maximum of the used memory during the stacking process, defaults to 8e9</span>
+<span class="sd">        :type mem_lim: float, optional</span>
+<span class="sd">        :param filenames: The files that are stacked. Only relevant if &#39;to_combine&#39; is a list of CCDData objects and not the actual filenames, defaults to None</span>
+<span class="sd">        :type filenames: list[str], optional</span>
+<span class="sd">        :return: Stacked image</span>
+<span class="sd">        :rtype: CCDData</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">master</span><span class="p">:</span> <span class="n">CCDData</span>
+        <span class="k">if</span> <span class="n">frame</span> <span class="o">!=</span> <span class="s1">&#39;flat&#39;</span><span class="p">:</span>
+            <span class="n">master</span> <span class="o">=</span> <span class="n">combine</span><span class="p">(</span><span class="n">to_combine</span><span class="p">,</span>
+                            <span class="n">method</span><span class="o">=</span><span class="s1">&#39;average&#39;</span><span class="p">,</span>
+                            <span class="n">sigma_clip</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">sigma_clip_low_thresh</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span> <span class="n">sigma_clip_high_thresh</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span>
+                            <span class="n">sigma_clip_func</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">ma</span><span class="o">.</span><span class="n">median</span><span class="p">,</span> <span class="n">sigma_clip_dev_func</span><span class="o">=</span><span class="n">mad_std</span><span class="p">,</span>
+                            <span class="n">mem_limit</span><span class="o">=</span><span class="n">mem_lim</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="c1"># defining function that returns the invers of the median</span>
+            <span class="c1"># needed to scale the flat frames to ~1 so the division does not change the values to much</span>
+            <span class="n">inv_median</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="mi">1</span><span class="o">/</span><span class="n">np</span><span class="o">.</span><span class="n">median</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+
+            <span class="n">master</span> <span class="o">=</span> <span class="n">combine</span><span class="p">(</span><span class="n">to_combine</span><span class="p">,</span>
+                            <span class="n">method</span><span class="o">=</span><span class="s1">&#39;average&#39;</span><span class="p">,</span> <span class="n">scale</span><span class="o">=</span><span class="n">inv_median</span><span class="p">,</span>
+                            <span class="n">sigma_clip</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">sigma_clip_low_thresh</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span> <span class="n">sigma_clip_high_thresh</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span>
+                            <span class="n">sigma_clip_func</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">ma</span><span class="o">.</span><span class="n">median</span><span class="p">,</span> <span class="n">sigma_clip_dev_func</span><span class="o">=</span><span class="n">mad_std</span><span class="p">,</span>
+                            <span class="n">mem_limit</span><span class="o">=</span><span class="n">mem_lim</span><span class="p">)</span>
+        
+        <span class="k">if</span> <span class="nb">type</span><span class="p">(</span><span class="n">to_combine</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span> <span class="o">==</span> <span class="n">CCDData</span><span class="p">:</span>
+            <span class="n">master</span><span class="o">.</span><span class="n">header</span> <span class="o">=</span> <span class="n">to_combine</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">header</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">with</span> <span class="n">fits</span><span class="o">.</span><span class="n">open</span><span class="p">(</span><span class="n">to_combine</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span> <span class="k">as</span> <span class="n">hdul</span><span class="p">:</span>
+                <span class="n">master</span><span class="o">.</span><span class="n">header</span> <span class="o">=</span> <span class="n">hdul</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">header</span>
+        <span class="c1"># adding an entry to the header</span>
+        <span class="n">master</span><span class="o">.</span><span class="n">meta</span><span class="p">[</span><span class="s1">&#39;nframes&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">to_combine</span><span class="p">)</span>
+        <span class="n">master</span><span class="o">.</span><span class="n">meta</span><span class="p">[</span><span class="s1">&#39;combined&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span>
+
+
+        <span class="c1"># generate the right filename depending on what arguments are given</span>
+        <span class="n">file_name</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;master_</span><span class="si">{</span><span class="n">frame</span><span class="si">}</span><span class="s2">&quot;</span>
+        <span class="k">if</span> <span class="n">obj</span> <span class="o">!=</span> <span class="s1">&#39;&#39;</span><span class="p">:</span>
+            <span class="n">file_name</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">file_name</span><span class="si">}</span><span class="s2">_</span><span class="si">{</span><span class="n">obj</span><span class="si">}</span><span class="s2">&quot;</span>
+        <span class="k">if</span> <span class="n">filt</span> <span class="o">!=</span> <span class="s1">&#39;&#39;</span><span class="p">:</span>
+            <span class="n">file_name</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">file_name</span><span class="si">}</span><span class="s2">_filter_</span><span class="si">{</span><span class="n">filt</span><span class="si">}</span><span class="s2">&quot;</span>
+        <span class="k">if</span> <span class="n">exposure</span> <span class="o">!=</span> <span class="s1">&#39;&#39;</span><span class="p">:</span>
+            <span class="n">file_name</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">file_name</span><span class="si">}</span><span class="s2">_</span><span class="si">{</span><span class="n">exposure</span><span class="si">}</span><span class="s2">s&quot;</span>
+        <span class="n">file_name</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">file_name</span><span class="si">}</span><span class="s2">.fits&quot;</span>
+
+        <span class="c1"># save the image</span>
+        <span class="n">master</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">reduced_path</span> <span class="o">/</span> <span class="n">file_name</span><span class="p">,</span> <span class="n">overwrite</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="nb">type</span><span class="p">(</span><span class="n">to_combine</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span> <span class="o">==</span> <span class="nb">str</span><span class="p">:</span>
+            <span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Combined </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">to_combine</span><span class="p">)</span><span class="si">}</span><span class="s2"> frames to one master </span><span class="si">{</span><span class="n">frame</span><span class="si">}</span><span class="s2"> frame.</span><span class="se">\n</span><span class="s2">Master filename:</span><span class="se">\t</span><span class="si">{</span><span class="n">file_name</span><span class="si">}</span><span class="se">\n</span><span class="s2">Object:</span><span class="se">\t</span><span class="si">{</span><span class="n">obj</span><span class="si">}</span><span class="se">\n</span><span class="s2">Filter:</span><span class="se">\t</span><span class="si">{</span><span class="n">filt</span><span class="si">}</span><span class="se">\n</span><span class="s2">Exposure:</span><span class="se">\t</span><span class="si">{</span><span class="n">exposure</span><span class="si">}</span><span class="se">\n</span><span class="s2">The used frames are:</span><span class="se">\n\t</span><span class="si">{</span><span class="s1">&#39;</span><span class="se">\n\t</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">to_combine</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="k">elif</span> <span class="n">filenames</span> <span class="o">!=</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Combined </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">to_combine</span><span class="p">)</span><span class="si">}</span><span class="s2"> frames to one master </span><span class="si">{</span><span class="n">frame</span><span class="si">}</span><span class="s2"> frame.</span><span class="se">\n</span><span class="s2">Master filename:</span><span class="se">\t</span><span class="si">{</span><span class="n">file_name</span><span class="si">}</span><span class="se">\n</span><span class="s2">Object:</span><span class="se">\t</span><span class="si">{</span><span class="n">obj</span><span class="si">}</span><span class="se">\n</span><span class="s2">Filter:</span><span class="se">\t</span><span class="si">{</span><span class="n">filt</span><span class="si">}</span><span class="se">\n</span><span class="s2">Exposure:</span><span class="se">\t</span><span class="si">{</span><span class="n">exposure</span><span class="si">}</span><span class="se">\n</span><span class="s2">The used frames are:</span><span class="se">\n\t</span><span class="si">{</span><span class="s1">&#39;</span><span class="se">\n\t</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">filenames</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Combined </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">to_combine</span><span class="p">)</span><span class="si">}</span><span class="s2"> frames to one master </span><span class="si">{</span><span class="n">frame</span><span class="si">}</span><span class="s2"> frame.</span><span class="se">\n</span><span class="s2">Master filename:</span><span class="se">\t</span><span class="si">{</span><span class="n">file_name</span><span class="si">}</span><span class="se">\n</span><span class="s2">Object:</span><span class="se">\t</span><span class="si">{</span><span class="n">obj</span><span class="si">}</span><span class="se">\n</span><span class="s2">Filter:</span><span class="se">\t</span><span class="si">{</span><span class="n">filt</span><span class="si">}</span><span class="se">\n</span><span class="s2">Exposure:</span><span class="se">\t</span><span class="si">{</span><span class="n">exposure</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">master</span>
+
+    <span class="k">def</span> <span class="nf">__rm_master</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">filelist</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Removes the master frames from the filelist</span>
+
+<span class="sd">        :param filelist: list with the filenames</span>
+<span class="sd">        :type filelist: list[str]</span>
+<span class="sd">        :return: return list of filename without the master frames</span>
+<span class="sd">        :rtype: list[str]</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">combined</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">ifc_reduced</span><span class="o">.</span><span class="n">files_filtered</span><span class="p">(</span><span class="n">combined</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">include_path</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="n">filelist</span> <span class="o">=</span> <span class="p">[</span><span class="n">file</span> <span class="k">for</span> <span class="n">file</span> <span class="ow">in</span> <span class="n">filelist</span> <span class="k">if</span> <span class="ow">not</span> <span class="n">file</span> <span class="ow">in</span> <span class="n">combined</span><span class="p">]</span>
+        <span class="k">return</span> <span class="n">filelist</span>
+    
+<div class="viewcode-block" id="DataReduction.align_astroalign">
+<a class="viewcode-back" href="../../data_processing.html#data_processing.data_reduction.DataReduction.align_astroalign">[docs]</a>
+    <span class="nd">@staticmethod</span>
+    <span class="k">def</span> <span class="nf">align_astroalign</span><span class="p">(</span><span class="n">to_combine</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="o">|</span><span class="n">CCDData</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="n">CCDData</span><span class="p">]:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Aligns the given images using the astroalign library</span>
+
+<span class="sd">        :param to_combine: list of filenames that should be aligned</span>
+<span class="sd">        :type to_combine: list[str|CCDData]</span>
+<span class="sd">        :return: list of all aligned images.</span>
+<span class="sd">        :rtype: list[CCDData]</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Started aligning images with &#39;astroalign&#39;.&quot;</span><span class="p">)</span>
+        <span class="c1"># the first image is the target</span>
+        <span class="c1"># all others will be aligned to this one</span>
+        <span class="k">with</span> <span class="n">fits</span><span class="o">.</span><span class="n">open</span><span class="p">(</span><span class="n">to_combine</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span> <span class="k">as</span> <span class="n">file</span><span class="p">:</span>
+            <span class="n">target</span> <span class="o">=</span> <span class="n">file</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">float</span><span class="p">)</span>
+
+        <span class="k">def</span> <span class="nf">align_img</span><span class="p">(</span><span class="n">img</span><span class="p">,</span> <span class="n">target</span><span class="p">):</span>
+            <span class="k">with</span> <span class="n">fits</span><span class="o">.</span><span class="n">open</span><span class="p">(</span><span class="n">img</span><span class="p">)</span> <span class="k">as</span> <span class="n">file</span><span class="p">:</span>
+                <span class="n">source</span> <span class="o">=</span> <span class="n">file</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">float</span><span class="p">)</span>
+            <span class="n">registered_img</span> <span class="o">=</span> <span class="n">CCDData</span><span class="p">(</span><span class="n">aa</span><span class="o">.</span><span class="n">register</span><span class="p">(</span><span class="n">source</span><span class="o">=</span><span class="n">source</span><span class="p">,</span> <span class="n">target</span><span class="o">=</span><span class="n">target</span><span class="p">,</span>
+                                                <span class="n">max_control_points</span><span class="o">=</span><span class="mi">50</span><span class="p">,</span> <span class="n">detection_sigma</span><span class="o">=</span><span class="mi">5</span><span class="p">)[</span><span class="mi">0</span><span class="p">],</span>
+                                                <span class="n">unit</span><span class="o">=</span><span class="s1">&#39;adu&#39;</span><span class="p">)</span>
+            <span class="k">return</span> <span class="n">registered_img</span>
+
+        <span class="k">with</span> <span class="n">ProcessPoolExecutor</span><span class="p">()</span> <span class="k">as</span> <span class="n">executor</span><span class="p">:</span>
+            <span class="n">aligned</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">CCDData</span><span class="p">]</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="n">executor</span><span class="o">.</span><span class="n">map</span><span class="p">(</span><span class="k">lambda</span> <span class="n">img</span><span class="p">:</span> <span class="n">align_img</span><span class="p">(</span><span class="n">img</span><span class="p">,</span> <span class="n">target</span><span class="p">),</span> <span class="n">to_combine</span><span class="p">))</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Finished aligning&quot;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">aligned</span></div>
+
+
+<div class="viewcode-block" id="DataReduction.align_simple">
+<a class="viewcode-back" href="../../data_processing.html#data_processing.data_reduction.DataReduction.align_simple">[docs]</a>
+    <span class="nd">@staticmethod</span>
+    <span class="k">def</span> <span class="nf">align_simple</span><span class="p">(</span><span class="n">to_combine</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="n">CCDData</span><span class="p">]:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Aligns the given images using an input from the user to detect a star that will be aligned. Since it only uses one star no rotational alignment is possible.</span>
+
+<span class="sd">        :param to_combine: list of filenames that should be aligned</span>
+<span class="sd">        :type to_combine: list[str]</span>
+<span class="sd">        :return: list of images that are aligne to the first</span>
+<span class="sd">        :rtype: list[CCDData]</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># define a helping function for the estimation of the first star center</span>
+        <span class="k">def</span> <span class="nf">estimate_px</span><span class="p">(</span><span class="n">data</span><span class="p">):</span>
+<span class="w">            </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">            Returns an estimate for the center position after a user input</span>
+
+<span class="sd">            Parameter</span>
+<span class="sd">                data (array) : the data arra with the stars, has to be in a form to call plt.imshow(data)</span>
+<span class="sd">            &quot;&quot;&quot;</span>
+            <span class="n">marker</span> <span class="o">=</span> <span class="kc">None</span>   <span class="c1"># marker to show the position of the click</span>
+            <span class="c1"># a callback function that handles the click in the image</span>
+            <span class="k">def</span> <span class="nf">onclick</span><span class="p">(</span><span class="n">event</span><span class="p">):</span>
+<span class="w">                </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">                Writes the current x and y positions to the coresponding variables</span>
+<span class="sd">                &quot;&quot;&quot;</span>
+                <span class="k">nonlocal</span> <span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">marker</span>
+                <span class="k">if</span> <span class="n">fig</span><span class="o">.</span><span class="n">canvas</span><span class="o">.</span><span class="n">toolbar</span><span class="o">.</span><span class="n">mode</span> <span class="o">==</span> <span class="s1">&#39;&#39;</span><span class="p">:</span>
+                    <span class="k">if</span> <span class="n">event</span><span class="o">.</span><span class="n">inaxes</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                        <span class="n">x</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">event</span><span class="o">.</span><span class="n">xdata</span><span class="p">)</span>
+                        <span class="n">y</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">event</span><span class="o">.</span><span class="n">ydata</span><span class="p">)</span>
+                        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Clicked on: </span><span class="si">{</span><span class="n">x</span><span class="si">}</span><span class="se">\t</span><span class="si">{</span><span class="n">y</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+                        <span class="c1"># remove marker if it exists</span>
+                        <span class="k">if</span> <span class="n">marker</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                            <span class="n">marker</span><span class="o">.</span><span class="n">remove</span><span class="p">()</span>
+                        
+                        <span class="n">marker</span> <span class="o">=</span> <span class="n">ax</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="s1">&#39;ro&#39;</span><span class="p">,</span> <span class="n">markersize</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span> <span class="n">markerfacecolor</span><span class="o">=</span><span class="s1">&#39;none&#39;</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="s2">&quot;Selected Position&quot;</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span>
+                        <span class="n">fig</span><span class="o">.</span><span class="n">canvas</span><span class="o">.</span><span class="n">draw</span><span class="p">()</span>
+            
+            <span class="c1"># show the data</span>
+            <span class="n">fig</span><span class="p">,</span> <span class="n">ax</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">()</span>
+            <span class="n">ax</span><span class="o">.</span><span class="n">set_title</span><span class="p">(</span><span class="s2">&quot;Click in the image to set an estimate for the first star center.</span><span class="se">\n</span><span class="s2">&quot;</span>
+                         <span class="s2">&quot;The last click before closing the window will be used.&quot;</span><span class="p">)</span>
+            <span class="n">ax</span><span class="o">.</span><span class="n">imshow</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">cmap</span><span class="o">=</span><span class="s1">&#39;Greys&#39;</span><span class="p">,</span> <span class="n">norm</span><span class="o">=</span><span class="n">LogNorm</span><span class="p">(</span><span class="n">vmin</span><span class="o">=</span><span class="mf">0.0001</span><span class="p">))</span>
+
+            <span class="n">x</span><span class="p">,</span> <span class="n">y</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span>
+            <span class="c1"># connect the event handling to allow the interaction with the mouse</span>
+            <span class="n">cid</span> <span class="o">=</span> <span class="n">fig</span><span class="o">.</span><span class="n">canvas</span><span class="o">.</span><span class="n">mpl_connect</span><span class="p">(</span><span class="s1">&#39;button_press_event&#39;</span><span class="p">,</span> <span class="n">onclick</span><span class="p">)</span>
+            <span class="n">plt</span><span class="o">.</span><span class="n">show</span><span class="p">()</span>
+
+            <span class="n">fig</span><span class="o">.</span><span class="n">canvas</span><span class="o">.</span><span class="n">mpl_disconnect</span><span class="p">(</span><span class="n">cid</span><span class="p">)</span>
+            <span class="k">return</span> <span class="n">x</span><span class="p">,</span> <span class="n">y</span>
+
+        <span class="c1"># helping function to determine the limits for a cutout</span>
+        <span class="k">def</span> <span class="nf">limits</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">halve_size</span><span class="p">):</span>
+            <span class="n">x_min</span> <span class="o">=</span> <span class="n">x</span> <span class="o">-</span> <span class="n">halve_size</span>
+            <span class="n">x_max</span> <span class="o">=</span> <span class="n">x</span> <span class="o">+</span> <span class="n">halve_size</span>
+            <span class="n">y_min</span> <span class="o">=</span> <span class="n">y</span> <span class="o">-</span> <span class="n">halve_size</span>
+            <span class="n">y_max</span> <span class="o">=</span> <span class="n">y</span> <span class="o">+</span> <span class="n">halve_size</span>
+            <span class="k">return</span> <span class="n">x_min</span><span class="p">,</span> <span class="n">x_max</span><span class="p">,</span> <span class="n">y_min</span><span class="p">,</span> <span class="n">y_max</span>
+        
+        <span class="c1"># open the taget image</span>
+        <span class="k">with</span> <span class="n">fits</span><span class="o">.</span><span class="n">open</span><span class="p">(</span><span class="n">to_combine</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span> <span class="k">as</span> <span class="n">file</span><span class="p">:</span>
+            <span class="n">target</span> <span class="o">=</span> <span class="n">file</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">data</span>
+        
+        <span class="c1"># getting the first estimate of the center of the star</span>
+        <span class="n">x</span><span class="p">,</span> <span class="n">y</span> <span class="o">=</span> <span class="n">estimate_px</span><span class="p">(</span><span class="n">target</span><span class="p">)</span>
+
+        <span class="c1"># getting the cutout limits for the fit</span>
+        <span class="n">x_min</span><span class="p">,</span> <span class="n">x_max</span><span class="p">,</span> <span class="n">y_min</span><span class="p">,</span> <span class="n">y_max</span> <span class="o">=</span> <span class="n">limits</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="mi">50</span><span class="p">)</span>   <span class="c1"># FIXME: determine the size of the cutout dynamically</span>
+
+        <span class="c1"># only use the cutout to decrease the data for the fit</span>
+        <span class="n">fit_data</span> <span class="o">=</span> <span class="n">target</span><span class="p">[</span><span class="n">y_min</span><span class="p">:</span><span class="n">y_max</span><span class="p">,</span> <span class="n">x_min</span><span class="p">:</span><span class="n">x_max</span><span class="p">]</span>
+
+        <span class="c1"># find the position of the max</span>
+        <span class="n">max_idx</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">fit_data</span> <span class="o">==</span> <span class="n">np</span><span class="o">.</span><span class="n">max</span><span class="p">(</span><span class="n">fit_data</span><span class="p">))</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">max_idx</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span>
+        <span class="n">y</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">max_idx</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+        <span class="c1"># determine the position in the whole image</span>
+        <span class="n">x0</span> <span class="o">=</span> <span class="n">x</span> <span class="o">+</span> <span class="n">x_min</span>
+        <span class="n">y0</span> <span class="o">=</span> <span class="n">y</span> <span class="o">+</span> <span class="n">y_min</span>
+
+        <span class="c1"># generate a list of aligned images</span>
+        <span class="n">aligned</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="n">x_prev</span> <span class="o">=</span> <span class="n">x0</span>
+        <span class="n">y_prev</span> <span class="o">=</span> <span class="n">y0</span>
+
+        <span class="k">for</span> <span class="n">img</span> <span class="ow">in</span> <span class="n">to_combine</span><span class="p">:</span>
+            <span class="c1"># open the current file</span>
+            <span class="k">with</span> <span class="n">fits</span><span class="o">.</span><span class="n">open</span><span class="p">(</span><span class="n">img</span><span class="p">)</span> <span class="k">as</span> <span class="n">file</span><span class="p">:</span>
+                <span class="n">source</span> <span class="o">=</span> <span class="n">file</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">data</span>
+            
+            <span class="c1"># make a cutout of the new image</span>
+            <span class="n">x_min</span><span class="p">,</span> <span class="n">x_max</span><span class="p">,</span> <span class="n">y_min</span><span class="p">,</span> <span class="n">y_max</span> <span class="o">=</span> <span class="n">limits</span><span class="p">(</span><span class="n">x_prev</span><span class="p">,</span> <span class="n">y_prev</span><span class="p">,</span> <span class="mi">50</span><span class="p">)</span>
+            <span class="n">fit_data</span> <span class="o">=</span> <span class="n">source</span><span class="p">[</span><span class="n">y_min</span><span class="p">:</span><span class="n">y_max</span><span class="p">,</span> <span class="n">x_min</span><span class="p">:</span><span class="n">x_max</span><span class="p">]</span>
+            <span class="c1"># apply a median filter to eliminate outliers</span>
+            <span class="n">med_data</span> <span class="o">=</span> <span class="n">median_filter</span><span class="p">(</span><span class="n">fit_data</span><span class="p">,</span> <span class="n">size</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span>
+            
+            <span class="c1"># find the position of the new max</span>
+            <span class="n">max_idx</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">med_data</span> <span class="o">==</span> <span class="n">np</span><span class="o">.</span><span class="n">max</span><span class="p">(</span><span class="n">med_data</span><span class="p">))</span>
+            
+            <span class="n">x1</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">max_idx</span><span class="p">[</span><span class="mi">1</span><span class="p">][</span><span class="mi">0</span><span class="p">])</span> <span class="o">+</span> <span class="n">x_min</span>
+            <span class="n">y1</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">max_idx</span><span class="p">[</span><span class="mi">0</span><span class="p">][</span><span class="mi">0</span><span class="p">])</span> <span class="o">+</span> <span class="n">y_min</span>
+
+            <span class="c1"># calculate the difference to the target image</span>
+            <span class="n">dx</span> <span class="o">=</span> <span class="n">x0</span> <span class="o">-</span> <span class="n">x1</span>
+            <span class="n">dy</span> <span class="o">=</span> <span class="n">y0</span> <span class="o">-</span> <span class="n">y1</span>
+            <span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Shift: </span><span class="si">{</span><span class="n">dx</span><span class="si">}</span><span class="s2"> </span><span class="si">{</span><span class="n">dy</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+            <span class="c1"># shift the data to match the target</span>
+            <span class="n">shifted_data</span> <span class="o">=</span> <span class="n">shift</span><span class="p">(</span><span class="n">source</span><span class="p">,</span> <span class="p">[</span><span class="n">dy</span><span class="p">,</span> <span class="n">dx</span><span class="p">])</span>
+            <span class="n">shifted_data</span> <span class="o">=</span> <span class="n">CCDData</span><span class="p">(</span><span class="n">data</span><span class="o">=</span><span class="n">shifted_data</span><span class="p">,</span> <span class="n">unit</span><span class="o">=</span><span class="s1">&#39;adu&#39;</span><span class="p">)</span>
+            <span class="n">aligned</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">shifted_data</span><span class="p">)</span>
+            <span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">img</span><span class="si">}</span><span class="s2"> aligned successfully&quot;</span><span class="p">)</span>
+
+            <span class="c1"># update the previouse value to center the next cutout</span>
+            <span class="n">x_prev</span> <span class="o">=</span> <span class="n">x1</span>
+            <span class="n">y_prev</span> <span class="o">=</span> <span class="n">y1</span>
+        
+        <span class="k">return</span> <span class="n">aligned</span></div>
+
+
+<div class="viewcode-block" id="DataReduction.align_wcs">
+<a class="viewcode-back" href="../../data_processing.html#data_processing.data_reduction.DataReduction.align_wcs">[docs]</a>
+    <span class="nd">@staticmethod</span>
+    <span class="k">def</span> <span class="nf">align_wcs</span><span class="p">(</span><span class="n">to_combine</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">CCDData</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="n">CCDData</span><span class="p">]:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Aligns the given images using the wcs information from the header</span>
+
+<span class="sd">        :param to_combine: list of filenames that should be aligned</span>
+<span class="sd">        :type to_combine: list[CCDData]</span>
+<span class="sd">        :return: list of aligned CCDData objects</span>
+<span class="sd">        :rtype: list[CCDData]</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># generating a target wcs to which all images are projected to</span>
+        <span class="k">with</span> <span class="n">fits</span><span class="o">.</span><span class="n">open</span><span class="p">(</span><span class="n">to_combine</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span> <span class="k">as</span> <span class="n">file</span><span class="p">:</span>
+            <span class="n">target_wcs</span><span class="p">:</span> <span class="n">WCS</span> <span class="o">=</span> <span class="n">WCS</span><span class="p">(</span><span class="n">header</span><span class="o">=</span><span class="n">file</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">header</span><span class="p">)</span>
+
+        <span class="k">def</span> <span class="nf">align_img</span><span class="p">(</span><span class="n">img</span><span class="p">,</span> <span class="n">target_wcs</span><span class="p">):</span>
+            <span class="k">with</span> <span class="n">fits</span><span class="o">.</span><span class="n">open</span><span class="p">(</span><span class="n">img</span><span class="p">)</span> <span class="k">as</span> <span class="n">file</span><span class="p">:</span>
+                <span class="n">ccd</span> <span class="o">=</span> <span class="n">CCDData</span><span class="p">(</span><span class="n">data</span><span class="o">=</span><span class="n">file</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">data</span><span class="p">,</span> <span class="n">wcs</span><span class="o">=</span><span class="n">WCS</span><span class="p">(</span><span class="n">header</span><span class="o">=</span><span class="n">file</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">header</span><span class="p">),</span> <span class="n">unit</span><span class="o">=</span><span class="s1">&#39;adu&#39;</span><span class="p">)</span>
+                <span class="n">new_image</span> <span class="o">=</span> <span class="n">wcs_project</span><span class="p">(</span><span class="n">ccd</span><span class="p">,</span> <span class="n">target_wcs</span><span class="p">)</span>
+                <span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">img</span><span class="si">}</span><span class="s2"> aligned successfully.&quot;</span><span class="p">)</span>
+                <span class="k">return</span> <span class="n">new_image</span> 
+
+        <span class="n">aligned</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">CCDData</span><span class="p">]</span> <span class="o">=</span> <span class="p">[</span><span class="n">align_img</span><span class="p">(</span><span class="n">img</span><span class="p">,</span> <span class="n">target_wcs</span><span class="p">)</span> <span class="k">for</span> <span class="n">img</span> <span class="ow">in</span> <span class="n">to_combine</span><span class="p">]</span>
+        
+        <span class="k">return</span> <span class="n">aligned</span></div>
+
+
+<div class="viewcode-block" id="DataReduction.best_dark">
+<a class="viewcode-back" href="../../data_processing.html#data_processing.data_reduction.DataReduction.best_dark">[docs]</a>
+    <span class="k">def</span> <span class="nf">best_dark</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">target</span><span class="p">:</span> <span class="nb">float</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">CCDData</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Determines the best dark for a given exposure time</span>
+
+<span class="sd">        :param target: exposure time for which the best darkframe should be found</span>
+<span class="sd">        :type target: float</span>
+<span class="sd">        :raises AttributeError: raises an AttributeError if no darkframes exist</span>
+<span class="sd">        :return: the best darkframe</span>
+<span class="sd">        :rtype: CCDData</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">master_frames</span><span class="p">[</span><span class="s1">&#39;dark&#39;</span><span class="p">]</span> <span class="o">==</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">dark_exposures</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">master_frames</span><span class="p">[</span><span class="s1">&#39;dark&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">keys</span><span class="p">())</span>
+            <span class="n">best_idx</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">digitize</span><span class="p">(</span><span class="n">target</span><span class="p">,</span> <span class="n">dark_exposures</span><span class="p">))</span>
+            <span class="n">best_exposure</span><span class="p">:</span> <span class="nb">float</span>
+            <span class="k">if</span> <span class="n">best_idx</span> <span class="o">==</span> <span class="nb">len</span><span class="p">(</span><span class="n">dark_exposures</span><span class="p">):</span>
+                <span class="n">best_exposure</span> <span class="o">=</span> <span class="n">dark_exposures</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">best_exposure</span> <span class="o">=</span> <span class="n">dark_exposures</span><span class="p">[</span><span class="n">best_idx</span><span class="p">]</span>
+            <span class="n">best_dark</span><span class="p">:</span> <span class="n">CCDData</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">master_frames</span><span class="p">[</span><span class="s1">&#39;dark&#39;</span><span class="p">][</span><span class="n">best_exposure</span><span class="p">]</span>
+            <span class="k">return</span> <span class="n">best_dark</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">AttributeError</span><span class="p">(</span><span class="s2">&quot;Expected dark frames to exist. Ensure that there exist at least one dark frame before running this function.&quot;</span><span class="p">)</span></div>
+
+            
+<div class="viewcode-block" id="DataReduction.check_master">
+<a class="viewcode-back" href="../../data_processing.html#data_processing.data_reduction.DataReduction.check_master">[docs]</a>
+    <span class="k">def</span> <span class="nf">check_master</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">frametype</span><span class="p">:</span><span class="nb">str</span><span class="p">,</span> <span class="n">master</span><span class="p">:</span><span class="nb">str</span><span class="o">=</span><span class="s1">&#39;&#39;</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Checks if a specific master frame exists</span>
+
+<span class="sd">        :param frametype: Specifies which frametype should be checked. Valid are &#39;bias&#39;, &#39;dark&#39;, &#39;flat&#39; and &#39;light&#39;</span>
+<span class="sd">        :type frametype: str</span>
+<span class="sd">        :param master: name of a specific master frame, defaults to &#39;&#39;</span>
+<span class="sd">        :type master: str, optional</span>
+<span class="sd">        :raises ValueError: if &#39;frametype&#39; does not have a valid value</span>
+<span class="sd">        :return: True if the file exist, False otherwise</span>
+<span class="sd">        :rtype: bool</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># no master filename is given</span>
+        <span class="k">if</span> <span class="n">master</span> <span class="o">==</span> <span class="s1">&#39;&#39;</span><span class="p">:</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">master_frames</span><span class="p">[</span><span class="n">frametype</span><span class="p">]</span> <span class="o">!=</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="k">return</span> <span class="kc">True</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">masters</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">ifc_reduced</span><span class="o">.</span><span class="n">files_filtered</span><span class="p">(</span><span class="n">imagetyp</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">imagetypes</span><span class="p">[</span><span class="n">frametype</span><span class="p">],</span> <span class="n">combined</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+                <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">masters</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>    <span class="c1"># no masters found</span>
+                    <span class="k">return</span> <span class="kc">False</span>
+                <span class="k">else</span><span class="p">:</span>
+                    <span class="k">return</span> <span class="kc">True</span>
+        <span class="c1"># a filename for a master is given</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">reduced_path</span> <span class="o">/</span> <span class="n">master</span><span class="p">):</span>
+                <span class="k">return</span> <span class="kc">True</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">message</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;The given filename for a master bias is not valid. Make sure not to include the foldername and only the filename. &#39;</span><span class="si">{</span><span class="n">master</span><span class="si">}</span><span class="s2">&#39; was given&quot;</span>
+                <span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="n">message</span><span class="p">)</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="n">message</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="DataReduction.reduce_bias">
+<a class="viewcode-back" href="../../data_processing.html#data_processing.data_reduction.DataReduction.reduce_bias">[docs]</a>
+    <span class="k">def</span> <span class="nf">reduce_bias</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">force_new_master</span><span class="p">:</span><span class="nb">bool</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">keep_files</span><span class="p">:</span><span class="nb">bool</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">CCDData</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Calibrates the bias frames and stacks them to a master bias. If there is already a masterbias in the folder for the reduced data this one will be used instead of creating a new one.</span>
+
+<span class="sd">        :param force_new_master: True if a new master should be created even if there is already one, defaults to False</span>
+<span class="sd">        :type force_new_master: bool, optional</span>
+<span class="sd">        :param keep_files: True if the individual file should be kept in the reduced folder, False if the files should be removed after stacking. The raw data will not be altered, only the files in the reduced path, defaults to False</span>
+<span class="sd">        :type keep_files: bool, optional</span>
+<span class="sd">        :raises RuntimeError: if more than one master bias is found.</span>
+<span class="sd">        :return: stacked master bias</span>
+<span class="sd">        :rtype: CCDData</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Started reduction of bias frames&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">ifc_reduced</span><span class="o">.</span><span class="n">refresh</span><span class="p">()</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">check_master</span><span class="p">(</span><span class="s2">&quot;bias&quot;</span><span class="p">)</span> <span class="ow">or</span> <span class="n">force_new_master</span><span class="p">:</span>
+            <span class="c1"># There is no need for somehow calibrating them. Just copy to the calibrated path</span>
+            <span class="c1"># select only bias frames</span>
+            <span class="n">biases</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">ifc_raw</span><span class="o">.</span><span class="n">files_filtered</span><span class="p">(</span><span class="n">imagetyp</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">imagetypes</span><span class="p">[</span><span class="s1">&#39;bias&#39;</span><span class="p">],</span> <span class="n">include_path</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+            <span class="c1"># copy the biasframes to the folder with calibrated data</span>
+            <span class="k">with</span> <span class="n">ThreadPoolExecutor</span><span class="p">()</span> <span class="k">as</span> <span class="n">executor</span><span class="p">:</span>
+                <span class="n">executor</span><span class="o">.</span><span class="n">map</span><span class="p">(</span><span class="k">lambda</span> <span class="n">file</span><span class="p">:</span> <span class="n">shutil</span><span class="o">.</span><span class="n">copy</span><span class="p">(</span><span class="n">file</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">reduced_path</span><span class="p">),</span> <span class="n">biases</span><span class="p">)</span>
+
+            <span class="c1"># stack them to a master bias</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">ifc_reduced</span><span class="o">.</span><span class="n">refresh</span><span class="p">()</span>
+            <span class="n">reduced_biases</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">ifc_reduced</span><span class="o">.</span><span class="n">files_filtered</span><span class="p">(</span><span class="n">imagetyp</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">imagetypes</span><span class="p">[</span><span class="s1">&#39;bias&#39;</span><span class="p">],</span> <span class="n">include_path</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+            <span class="k">if</span> <span class="n">force_new_master</span><span class="p">:</span>
+                <span class="c1"># remove existing master from the imagelist, since those should not be stacked</span>
+                <span class="n">reduced_biases</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">__rm_master</span><span class="p">(</span><span class="n">reduced_biases</span><span class="p">)</span>
+
+            <span class="bp">self</span><span class="o">.</span><span class="n">master_frames</span><span class="p">[</span><span class="s1">&#39;bias&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">__combine</span><span class="p">(</span><span class="n">reduced_biases</span><span class="p">,</span> <span class="n">frame</span><span class="o">=</span><span class="s1">&#39;bias&#39;</span><span class="p">)</span>
+
+            <span class="c1"># remove all single calibrate bias frames</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="n">keep_files</span><span class="p">:</span>
+                <span class="k">with</span> <span class="n">ThreadPoolExecutor</span><span class="p">()</span> <span class="k">as</span> <span class="n">executor</span><span class="p">:</span>
+                    <span class="n">executor</span><span class="o">.</span><span class="n">map</span><span class="p">(</span><span class="k">lambda</span> <span class="n">file</span><span class="p">:</span> <span class="n">os</span><span class="o">.</span><span class="n">remove</span><span class="p">(</span><span class="n">Path</span><span class="p">(</span><span class="s1">&#39;.&#39;</span><span class="p">,</span> <span class="n">file</span><span class="p">)),</span> <span class="n">reduced_biases</span><span class="p">)</span>
+
+        <span class="c1"># in all other cases there is already a master bias that can be used</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;One or more master bias were detected.&quot;</span><span class="p">)</span>
+            <span class="n">master_bias</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">ifc_reduced</span><span class="o">.</span><span class="n">files_filtered</span><span class="p">(</span><span class="n">imagetyp</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">imagetypes</span><span class="p">[</span><span class="s1">&#39;bias&#39;</span><span class="p">],</span> <span class="n">combined</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+            <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">master_bias</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">1</span><span class="p">:</span>
+                <span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;More than one master bias are detected. Make sure that at most one frame is available. The found files are </span><span class="si">{</span><span class="s1">&#39;</span><span class="se">\n</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">master_bias</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+                <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;More than one master bias are detected. Make sure that at most one frame is available. The found files are </span><span class="si">{</span><span class="n">master_bias</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="k">with</span> <span class="n">fits</span><span class="o">.</span><span class="n">open</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">reduced_path</span> <span class="o">/</span> <span class="n">master_bias</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span> <span class="k">as</span> <span class="n">file</span><span class="p">:</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">master_frames</span><span class="p">[</span><span class="s1">&#39;bias&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">CCDData</span><span class="p">(</span><span class="n">file</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">data</span><span class="p">,</span> <span class="n">unit</span><span class="o">=</span><span class="s1">&#39;adu&#39;</span><span class="p">)</span>
+                <span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;One master bias was detected and will be used.</span><span class="se">\n</span><span class="s2">Filename: </span><span class="si">{</span><span class="n">Path</span><span class="p">(</span><span class="s1">&#39;.&#39;</span><span class="p">,</span><span class="w"> </span><span class="sa">f</span><span class="s1">&#39;</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">reduced_path</span><span class="si">}</span><span class="s1">/</span><span class="si">{</span><span class="n">master_bias</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="si">}</span><span class="s1">&#39;</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Finished reduction of bias frames.</span><span class="se">\n</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">master_frames</span><span class="p">[</span><span class="s1">&#39;bias&#39;</span><span class="p">]</span></div>
+
+    
+<div class="viewcode-block" id="DataReduction.reduce_darks">
+<a class="viewcode-back" href="../../data_processing.html#data_processing.data_reduction.DataReduction.reduce_darks">[docs]</a>
+    <span class="k">def</span> <span class="nf">reduce_darks</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">force_new_master</span><span class="p">:</span><span class="nb">bool</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">keep_files</span><span class="p">:</span><span class="nb">bool</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">master_bias</span><span class="p">:</span><span class="nb">str</span><span class="o">|</span><span class="n">CCDData</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="n">CCDData</span><span class="p">]:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Calibrates the dark frames and stacks them to a master dark.</span>
+
+<span class="sd">        :param force_new_master: True if a new master should be created even if there is already one, defaults to False</span>
+<span class="sd">        :type force_new_master: bool, optional</span>
+<span class="sd">        :param keep_files: True if the individual file should be kept in the reduced folder, False if the files should be removed after stacking. The raw data will not be altered, only the files in the reduced path, defaults to False</span>
+<span class="sd">        :type keep_files: bool, optional</span>
+<span class="sd">        :param master_bias: filename or CCDData object of the frame that should be used for bias subtraction, defaults to None</span>
+<span class="sd">        :type master_bias: str | CCDData, optional</span>
+<span class="sd">        :raises RuntimeError: if more than one master dark for the same exposure time is found</span>
+<span class="sd">        :return: dict with the eexposuretime as key and the stacked CCDData object as the value</span>
+<span class="sd">        :rtype: dict[float, CCDData]</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Started reduction of dark frames.&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">ifc_reduced</span><span class="o">.</span><span class="n">refresh</span><span class="p">()</span>
+        <span class="c1"># 1) check for existing</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">check_master</span><span class="p">(</span><span class="s2">&quot;dark&quot;</span><span class="p">)</span> <span class="ow">or</span> <span class="n">force_new_master</span><span class="p">:</span>
+            <span class="c1"># ensure that a master bias exists</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">master_frames</span><span class="p">[</span><span class="s1">&#39;bias&#39;</span><span class="p">]</span> <span class="o">==</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">reduce_bias</span><span class="p">()</span>
+
+            <span class="n">dark_times</span><span class="p">:</span> <span class="nb">set</span><span class="p">[</span><span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="nb">set</span><span class="p">(</span><span class="n">h</span><span class="p">[</span><span class="s1">&#39;exptime&#39;</span><span class="p">]</span> <span class="k">for</span> <span class="n">h</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">ifc_raw</span><span class="o">.</span><span class="n">headers</span><span class="p">(</span><span class="n">imagetyp</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">imagetypes</span><span class="p">[</span><span class="s1">&#39;dark&#39;</span><span class="p">]))</span>
+
+            <span class="c1"># 2) reduce the dark frames</span>
+            <span class="k">def</span> <span class="nf">correct</span><span class="p">(</span><span class="n">ccd</span><span class="p">,</span> <span class="n">fname</span><span class="p">):</span>
+                <span class="n">ccd</span> <span class="o">=</span> <span class="n">subtract_bias</span><span class="p">(</span><span class="n">ccd</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">master_frames</span><span class="p">[</span><span class="s1">&#39;bias&#39;</span><span class="p">])</span>
+                <span class="n">ccd</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">reduced_path</span> <span class="o">/</span> <span class="n">fname</span><span class="p">,</span> <span class="n">overwrite</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+            <span class="k">with</span> <span class="n">ThreadPoolExecutor</span><span class="p">()</span> <span class="k">as</span> <span class="n">executor</span><span class="p">:</span>
+                <span class="n">executor</span><span class="o">.</span><span class="n">map</span><span class="p">(</span><span class="k">lambda</span> <span class="n">args</span><span class="p">:</span> <span class="n">correct</span><span class="p">(</span><span class="o">*</span><span class="n">args</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">ifc_raw</span><span class="o">.</span><span class="n">ccds</span><span class="p">(</span><span class="n">imagetyp</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">imagetypes</span><span class="p">[</span><span class="s1">&#39;dark&#39;</span><span class="p">],</span> <span class="n">return_fname</span><span class="o">=</span><span class="kc">True</span><span class="p">))</span>
+
+            <span class="c1"># 3) stack the frames and use dict for different exp times</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">ifc_reduced</span><span class="o">.</span><span class="n">refresh</span><span class="p">()</span>
+            <span class="k">for</span> <span class="n">exp_time</span> <span class="ow">in</span> <span class="n">dark_times</span><span class="p">:</span>
+                <span class="n">reduced_darks</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">ifc_reduced</span><span class="o">.</span><span class="n">files_filtered</span><span class="p">(</span><span class="n">imagetyp</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">imagetypes</span><span class="p">[</span><span class="s1">&#39;dark&#39;</span><span class="p">],</span> <span class="n">exptime</span><span class="o">=</span><span class="n">exp_time</span><span class="p">,</span> <span class="n">include_path</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+                <span class="k">if</span> <span class="n">force_new_master</span><span class="p">:</span>
+                <span class="c1"># remove existing master from the imagelist, since those should not be stacked</span>
+                    <span class="n">reduced_darks</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">__rm_master</span><span class="p">(</span><span class="n">reduced_darks</span><span class="p">)</span>
+
+                <span class="bp">self</span><span class="o">.</span><span class="n">__combine</span><span class="p">(</span><span class="n">reduced_darks</span><span class="p">,</span> <span class="n">frame</span><span class="o">=</span><span class="s1">&#39;dark&#39;</span><span class="p">,</span> <span class="n">exposure</span><span class="o">=</span><span class="nb">str</span><span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="n">exp_time</span><span class="p">)))</span>
+            
+            <span class="c1"># 4) clean up</span>
+            <span class="c1"># remove all single calibrate bias frames</span>
+            <span class="n">reduced_darks</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">ifc_reduced</span><span class="o">.</span><span class="n">files_filtered</span><span class="p">(</span><span class="n">imagetyp</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">imagetypes</span><span class="p">[</span><span class="s1">&#39;dark&#39;</span><span class="p">],</span> <span class="n">include_path</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+            <span class="n">reduced_darks</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">__rm_master</span><span class="p">(</span><span class="n">reduced_darks</span><span class="p">)</span>
+
+            <span class="k">if</span> <span class="ow">not</span> <span class="n">keep_files</span><span class="p">:</span>
+                <span class="k">with</span> <span class="n">ThreadPoolExecutor</span><span class="p">()</span> <span class="k">as</span> <span class="n">executor</span><span class="p">:</span>
+                    <span class="n">executor</span><span class="o">.</span><span class="n">map</span><span class="p">(</span><span class="k">lambda</span> <span class="n">file</span><span class="p">:</span> <span class="n">os</span><span class="o">.</span><span class="n">remove</span><span class="p">(</span><span class="n">Path</span><span class="p">(</span><span class="s1">&#39;.&#39;</span><span class="p">,</span> <span class="n">file</span><span class="p">)),</span> <span class="n">reduced_darks</span><span class="p">)</span>
+                <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Removed all reduced dark frame files.&quot;</span><span class="p">)</span>
+
+        <span class="c1"># in all other cases there is already a master dark that can be used</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;One or more master darks were detected.&quot;</span><span class="p">)</span>
+            <span class="n">master_darks</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">ifc_reduced</span><span class="o">.</span><span class="n">files_filtered</span><span class="p">(</span><span class="n">imagetyp</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">imagetypes</span><span class="p">[</span><span class="s1">&#39;dark&#39;</span><span class="p">],</span> <span class="n">combined</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">include_path</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+            <span class="n">exptimes</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+            <span class="k">for</span> <span class="n">dark</span> <span class="ow">in</span> <span class="n">master_darks</span><span class="p">:</span>
+                <span class="c1"># iterate over the files and check for duplicates for the same exposure time</span>
+                <span class="k">with</span> <span class="n">fits</span><span class="o">.</span><span class="n">open</span><span class="p">(</span><span class="n">dark</span><span class="p">)</span> <span class="k">as</span> <span class="n">file</span><span class="p">:</span>
+                    <span class="n">exp_time</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">file</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">header</span><span class="p">[</span><span class="s1">&#39;exptime&#39;</span><span class="p">])</span>
+                    <span class="k">if</span> <span class="n">exp_time</span> <span class="ow">in</span> <span class="n">exptimes</span><span class="p">:</span>
+                        <span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;More than one master dark for the same exposure time are detected. Make sure that at most one file for each exposure time is available. The found files are </span><span class="si">{</span><span class="s1">&#39;</span><span class="se">\n</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">master_darks</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+                        <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;More than one master dark for the same exposure time are detected. Make sure that at most one file for each exposure time is available. The found files are </span><span class="si">{</span><span class="n">master_darks</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+                    <span class="k">else</span><span class="p">:</span>
+                        <span class="bp">self</span><span class="o">.</span><span class="n">master_frames</span><span class="p">[</span><span class="s1">&#39;dark&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span><span class="n">exp_time</span><span class="p">:</span><span class="n">CCDData</span><span class="p">(</span><span class="n">file</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">data</span><span class="p">,</span> <span class="n">unit</span><span class="o">=</span><span class="s1">&#39;adu&#39;</span><span class="p">)}</span>
+                        <span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;One master dark with </span><span class="si">{</span><span class="n">exp_time</span><span class="si">}</span><span class="s2"> s exposure was detected and will be used.</span><span class="se">\n</span><span class="s2">Filename: </span><span class="si">{</span><span class="n">dark</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+                        <span class="n">exptimes</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">master_frames</span><span class="p">[</span><span class="s1">&#39;dark&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">keys</span><span class="p">())</span>
+
+        <span class="c1"># create a dictionary for better access</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">ifc_reduced</span><span class="o">.</span><span class="n">refresh</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">master_frames</span><span class="p">[</span><span class="s1">&#39;dark&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span><span class="n">ccd</span><span class="o">.</span><span class="n">header</span><span class="p">[</span><span class="s1">&#39;exptime&#39;</span><span class="p">]:</span> <span class="n">ccd</span> <span class="k">for</span> <span class="n">ccd</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">ifc_reduced</span><span class="o">.</span><span class="n">ccds</span><span class="p">(</span><span class="n">imagetyp</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">imagetypes</span><span class="p">[</span><span class="s1">&#39;dark&#39;</span><span class="p">],</span> <span class="n">combined</span><span class="o">=</span><span class="kc">True</span><span class="p">)}</span>
+
+        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Finished reduction of dark frames.</span><span class="se">\n</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">master_frames</span><span class="p">[</span><span class="s1">&#39;dark&#39;</span><span class="p">]</span></div>
+
+
+<div class="viewcode-block" id="DataReduction.reduce_flats">
+<a class="viewcode-back" href="../../data_processing.html#data_processing.data_reduction.DataReduction.reduce_flats">[docs]</a>
+    <span class="k">def</span> <span class="nf">reduce_flats</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">force_new_master</span><span class="p">:</span><span class="nb">bool</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">keep_files</span><span class="p">:</span><span class="nb">bool</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">master_bias</span><span class="p">:</span><span class="nb">str</span><span class="o">|</span><span class="n">CCDData</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">master_dark</span><span class="p">:</span><span class="nb">str</span><span class="o">|</span><span class="n">CCDData</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">CCDData</span><span class="p">]:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot; Calibrates the flat frames and stacks them to a master flat.</span>
+
+<span class="sd">        :param force_new_master: True if a new master should be created even if there is already one, defaults to False</span>
+<span class="sd">        :type force_new_master: bool, optional</span>
+<span class="sd">        :param keep_files: True if the individual file should be kept in the reduced folder, False if the files should be removed after stacking. The raw data will not be altered, only the files in the reduced path, defaults to False</span>
+<span class="sd">        :type keep_files: bool, optional</span>
+<span class="sd">        :param master_bias: filename or CCDData object of the frame that should be used for bias subtraction, defaults to None</span>
+<span class="sd">        :type master_bias: str | CCDData, optional</span>
+<span class="sd">        :param master_dark: filename or CCDData object of the frame that should be used for dark subtraction, defaults to None</span>
+<span class="sd">        :type master_dark: str | CCDData, optional</span>
+<span class="sd">        :raises RuntimeError: if more than one master flat for the same filter is found</span>
+<span class="sd">        :return: dict with the name of the filter as key and the CCDData objects of the stacked flat frame sas the values.</span>
+<span class="sd">        :rtype: dict[str, CCDData]</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Started reduction of flat frames.&quot;</span><span class="p">)</span>
+        <span class="c1"># 1) check for existing</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">check_master</span><span class="p">(</span><span class="s1">&#39;flat&#39;</span><span class="p">)</span> <span class="ow">or</span> <span class="n">force_new_master</span><span class="p">:</span>
+            <span class="c1"># check necessary files</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">master_frames</span><span class="p">[</span><span class="s1">&#39;bias&#39;</span><span class="p">]</span> <span class="o">==</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">reduce_bias</span><span class="p">(</span><span class="n">force_new_master</span><span class="p">,</span> <span class="n">keep_files</span><span class="p">)</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">master_frames</span><span class="p">[</span><span class="s1">&#39;dark&#39;</span><span class="p">]</span> <span class="o">==</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">reduce_darks</span><span class="p">(</span><span class="n">force_new_master</span><span class="p">,</span> <span class="n">keep_files</span><span class="p">)</span>
+        
+        <span class="c1"># 2) calibrate the flat frames</span>
+                <span class="c1"># ccd.write(self.reduced_path / fname, overwrite=True)</span>
+            <span class="k">def</span> <span class="nf">correct</span><span class="p">(</span><span class="n">hdu</span><span class="p">,</span> <span class="n">fname</span><span class="p">):</span>
+                <span class="n">ccd</span> <span class="o">=</span> <span class="n">CCDData</span><span class="p">(</span><span class="n">hdu</span><span class="o">.</span><span class="n">data</span><span class="p">,</span> <span class="n">meta</span><span class="o">=</span><span class="n">hdu</span><span class="o">.</span><span class="n">header</span><span class="p">,</span> <span class="n">unit</span><span class="o">=</span><span class="s1">&#39;adu&#39;</span><span class="p">)</span>
+                <span class="n">ccd</span> <span class="o">=</span> <span class="n">subtract_bias</span><span class="p">(</span><span class="n">ccd</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">master_frames</span><span class="p">[</span><span class="s1">&#39;bias&#39;</span><span class="p">])</span>
+                <span class="n">ccd</span> <span class="o">=</span> <span class="n">subtract_dark</span><span class="p">(</span><span class="n">ccd</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">best_dark</span><span class="p">(</span><span class="n">hdu</span><span class="o">.</span><span class="n">header</span><span class="p">[</span><span class="s1">&#39;exptime&#39;</span><span class="p">]),</span> <span class="n">exposure_time</span><span class="o">=</span><span class="s1">&#39;exptime&#39;</span><span class="p">,</span> <span class="n">exposure_unit</span><span class="o">=</span><span class="n">units</span><span class="o">.</span><span class="n">second</span><span class="p">,</span> <span class="n">scale</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+                <span class="n">ccd</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">reduced_path</span> <span class="o">/</span> <span class="n">fname</span><span class="p">,</span> <span class="n">overwrite</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+            <span class="k">with</span> <span class="n">ThreadPoolExecutor</span><span class="p">()</span> <span class="k">as</span> <span class="n">executor</span><span class="p">:</span>
+                <span class="n">executor</span><span class="o">.</span><span class="n">map</span><span class="p">(</span><span class="k">lambda</span> <span class="n">args</span><span class="p">:</span> <span class="n">correct</span><span class="p">(</span><span class="o">*</span><span class="n">args</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">ifc_raw</span><span class="o">.</span><span class="n">hdus</span><span class="p">(</span><span class="n">imagetyp</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">imagetypes</span><span class="p">[</span><span class="s1">&#39;flat&#39;</span><span class="p">],</span> <span class="n">return_fname</span><span class="o">=</span><span class="kc">True</span><span class="p">))</span>
+                
+        <span class="c1"># 3) stack them</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">ifc_reduced</span><span class="o">.</span><span class="n">refresh</span><span class="p">()</span>
+
+            <span class="c1"># creating a set of all filters to distinguish the flats</span>
+            <span class="n">flat_filters</span><span class="p">:</span> <span class="nb">set</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="nb">set</span><span class="p">(</span><span class="n">h</span><span class="p">[</span><span class="s1">&#39;filter&#39;</span><span class="p">]</span> <span class="k">for</span> <span class="n">h</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">ifc_reduced</span><span class="o">.</span><span class="n">headers</span><span class="p">(</span><span class="n">imagetyp</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">imagetypes</span><span class="p">[</span><span class="s1">&#39;flat&#39;</span><span class="p">]))</span>
+
+            <span class="k">for</span> <span class="n">filt</span> <span class="ow">in</span> <span class="n">flat_filters</span><span class="p">:</span>
+                <span class="n">reduced_flats</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">ifc_reduced</span><span class="o">.</span><span class="n">files_filtered</span><span class="p">(</span><span class="n">imagetyp</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">imagetypes</span><span class="p">[</span><span class="s1">&#39;flat&#39;</span><span class="p">],</span> <span class="nb">filter</span><span class="o">=</span><span class="n">filt</span><span class="p">,</span> <span class="n">include_path</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+                <span class="c1"># remove existing master from the imagelist, since those should not be stacked</span>
+                <span class="k">if</span> <span class="n">force_new_master</span><span class="p">:</span>
+                    <span class="n">reduced_flats</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">__rm_master</span><span class="p">(</span><span class="n">reduced_flats</span><span class="p">)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">__combine</span><span class="p">(</span><span class="n">reduced_flats</span><span class="p">,</span> <span class="n">frame</span><span class="o">=</span><span class="s1">&#39;flat&#39;</span><span class="p">,</span> <span class="n">filt</span><span class="o">=</span><span class="n">filt</span><span class="p">)</span>
+
+        <span class="c1"># 4) clean up</span>
+            <span class="c1"># remove not stacked files if not needed</span>
+            <span class="n">reduced_flats</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">ifc_reduced</span><span class="o">.</span><span class="n">files_filtered</span><span class="p">(</span><span class="n">imagetyp</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">imagetypes</span><span class="p">[</span><span class="s1">&#39;flat&#39;</span><span class="p">],</span> <span class="n">include_path</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+            <span class="n">reduced_flats</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">__rm_master</span><span class="p">(</span><span class="n">reduced_flats</span><span class="p">)</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="n">keep_files</span><span class="p">:</span>
+                <span class="k">with</span> <span class="n">ThreadPoolExecutor</span><span class="p">()</span> <span class="k">as</span> <span class="n">executor</span><span class="p">:</span>
+                    <span class="n">executor</span><span class="o">.</span><span class="n">map</span><span class="p">(</span><span class="k">lambda</span> <span class="n">file</span><span class="p">:</span> <span class="n">os</span><span class="o">.</span><span class="n">remove</span><span class="p">(</span><span class="n">file</span><span class="p">),</span> <span class="n">reduced_flats</span><span class="p">)</span>
+                <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Removed all reduced flat frame files.&quot;</span><span class="p">)</span>
+        
+        <span class="c1"># in all other cases there are already master flats</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;One or more master flats were detected.&quot;</span><span class="p">)</span>
+            <span class="n">master_flats</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">ifc_reduced</span><span class="o">.</span><span class="n">files_filtered</span><span class="p">(</span><span class="n">imagetyp</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">imagetypes</span><span class="p">[</span><span class="s1">&#39;flat&#39;</span><span class="p">],</span> <span class="n">combined</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">include_path</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+            <span class="n">filters</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+            <span class="k">for</span> <span class="n">flat</span> <span class="ow">in</span> <span class="n">master_flats</span><span class="p">:</span>
+                <span class="c1"># iterate over filters and check for duplicates</span>
+                <span class="k">with</span> <span class="n">fits</span><span class="o">.</span><span class="n">open</span><span class="p">(</span><span class="n">flat</span><span class="p">)</span> <span class="k">as</span> <span class="n">file</span><span class="p">:</span>
+                    <span class="n">used_filter</span> <span class="o">=</span> <span class="n">file</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">header</span><span class="p">[</span><span class="s1">&#39;filter&#39;</span><span class="p">]</span>
+                    <span class="k">if</span> <span class="n">used_filter</span> <span class="ow">in</span> <span class="n">filters</span><span class="p">:</span>
+                        <span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;More than one master flat for the same filter are detected. Make shure that at most one file for each filter is available. The found files are </span><span class="si">{</span><span class="s1">&#39;</span><span class="se">\n</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">master_flats</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+                        <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;More than one master flat for the same filter are detected. Make shure that at most one file for each filter is available. The found files are </span><span class="si">{</span><span class="n">master_flats</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+                    <span class="k">else</span><span class="p">:</span>
+                        <span class="bp">self</span><span class="o">.</span><span class="n">master_frames</span><span class="p">[</span><span class="s1">&#39;flat&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span><span class="n">used_filter</span><span class="p">:</span><span class="n">CCDData</span><span class="p">(</span><span class="n">file</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">data</span><span class="p">,</span> <span class="n">unit</span><span class="o">=</span><span class="s1">&#39;adu&#39;</span><span class="p">)}</span>
+                        <span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;One master flat for filter </span><span class="si">{</span><span class="n">used_filter</span><span class="si">}</span><span class="s2"> was detected and will be used.</span><span class="se">\n</span><span class="s2">Filename: </span><span class="si">{</span><span class="n">flat</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        
+        <span class="c1"># create dictionary for better access</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">ifc_reduced</span><span class="o">.</span><span class="n">refresh</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">master_frames</span><span class="p">[</span><span class="s1">&#39;flat&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span><span class="n">ccd</span><span class="o">.</span><span class="n">header</span><span class="p">[</span><span class="s1">&#39;filter&#39;</span><span class="p">]:</span> <span class="n">ccd</span> <span class="k">for</span> <span class="n">ccd</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">ifc_reduced</span><span class="o">.</span><span class="n">ccds</span><span class="p">(</span><span class="n">imagetyp</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">imagetypes</span><span class="p">[</span><span class="s1">&#39;flat&#39;</span><span class="p">],</span> <span class="n">combined</span><span class="o">=</span><span class="kc">True</span><span class="p">)}</span>
+
+        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Finished reduction of flat frames.</span><span class="se">\n</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">master_frames</span><span class="p">[</span><span class="s1">&#39;flat&#39;</span><span class="p">]</span></div>
+
+
+<div class="viewcode-block" id="DataReduction.reduce_lights">
+<a class="viewcode-back" href="../../data_processing.html#data_processing.data_reduction.DataReduction.reduce_lights">[docs]</a>
+    <span class="k">def</span> <span class="nf">reduce_lights</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">correct_cosmics</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">master_bias</span><span class="p">:</span><span class="nb">str</span><span class="o">|</span><span class="n">CCDData</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">master_dark</span><span class="p">:</span><span class="nb">str</span><span class="o">|</span><span class="n">CCDData</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">master_flat</span><span class="p">:</span><span class="nb">str</span><span class="o">|</span><span class="n">CCDData</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Corrects the light frames by subtracting bias and dark frames and dividing by the flat. This does NOT create a master frame.</span>
+
+<span class="sd">        :param correct_cosmics: whether to correct cosmic rays, defaults to True</span>
+<span class="sd">        :type correct_cosmics: bool, optional</span>
+<span class="sd">        :param master_bias: filename or CCDData object of the frame that should be used for bias subtraction, defaults to None</span>
+<span class="sd">        :type master_bias: str | CCDData, optional</span>
+<span class="sd">        :param master_dark: filename or CCDData object of the frame that should be used for dark subtraction, defaults to None</span>
+<span class="sd">        :type master_dark: str | CCDData, optional</span>
+<span class="sd">        :param master_flat: filename or CCDData object of the frame that should be used for flat division, defaults to None</span>
+<span class="sd">        :type master_flat: str | CCDData, optional</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Started reduction of light frames.&quot;</span><span class="p">)</span>
+        <span class="c1"># ensure all necessary files are available</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">master_frames</span><span class="p">[</span><span class="s1">&#39;bias&#39;</span><span class="p">]</span> <span class="o">==</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">reduce_bias</span><span class="p">()</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">master_frames</span><span class="p">[</span><span class="s1">&#39;dark&#39;</span><span class="p">]</span> <span class="o">==</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">reduce_darks</span><span class="p">()</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">master_frames</span><span class="p">[</span><span class="s1">&#39;flat&#39;</span><span class="p">]</span> <span class="o">==</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">reduce_flats</span><span class="p">()</span>
+
+        <span class="c1"># correction of light frames</span>
+        <span class="k">def</span> <span class="nf">correct</span><span class="p">(</span><span class="n">light</span><span class="p">,</span> <span class="n">fname</span><span class="p">,</span> <span class="n">corr_cos</span><span class="p">):</span>
+            <span class="k">if</span> <span class="n">corr_cos</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">cosmic_correct</span><span class="p">(</span><span class="n">data</span><span class="o">=</span><span class="n">light</span><span class="p">,</span> <span class="n">fname</span><span class="o">=</span><span class="n">fname</span><span class="p">)</span>
+            <span class="n">light</span> <span class="o">=</span> <span class="n">subtract_bias</span><span class="p">(</span><span class="n">light</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">master_frames</span><span class="p">[</span><span class="s1">&#39;bias&#39;</span><span class="p">])</span>
+            <span class="n">light</span> <span class="o">=</span> <span class="n">subtract_dark</span><span class="p">(</span><span class="n">light</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">best_dark</span><span class="p">(</span><span class="n">light</span><span class="o">.</span><span class="n">header</span><span class="p">[</span><span class="s1">&#39;exptime&#39;</span><span class="p">]),</span> <span class="n">exposure_time</span><span class="o">=</span><span class="s1">&#39;exptime&#39;</span><span class="p">,</span> <span class="n">exposure_unit</span><span class="o">=</span><span class="n">units</span><span class="o">.</span><span class="n">second</span><span class="p">,</span> <span class="n">scale</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+            <span class="n">light</span> <span class="o">=</span> <span class="n">flat_correct</span><span class="p">(</span><span class="n">light</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">master_frames</span><span class="p">[</span><span class="s1">&#39;flat&#39;</span><span class="p">][</span><span class="n">light</span><span class="o">.</span><span class="n">header</span><span class="p">[</span><span class="s1">&#39;filter&#39;</span><span class="p">]])</span>
+            <span class="n">light</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">reduced_path</span> <span class="o">/</span> <span class="sa">f</span><span class="s2">&quot;reduced_</span><span class="si">{</span><span class="n">fname</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">overwrite</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="k">with</span> <span class="n">ThreadPoolExecutor</span><span class="p">()</span> <span class="k">as</span> <span class="n">executor</span><span class="p">:</span>
+            <span class="n">executor</span><span class="o">.</span><span class="n">map</span><span class="p">(</span><span class="k">lambda</span> <span class="n">args</span><span class="p">:</span> <span class="n">correct</span><span class="p">(</span><span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="n">correct_cosmics</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">ifc_raw</span><span class="o">.</span><span class="n">ccds</span><span class="p">(</span><span class="n">imagetyp</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">imagetypes</span><span class="p">[</span><span class="s1">&#39;light&#39;</span><span class="p">],</span> <span class="n">return_fname</span><span class="o">=</span><span class="kc">True</span><span class="p">))</span>
+
+        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Finished reduction of light frames.</span><span class="se">\n</span><span class="s2">&quot;</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="DataReduction.align_images">
+<a class="viewcode-back" href="../../data_processing.html#data_processing.data_reduction.DataReduction.align_images">[docs]</a>
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">align_images</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">filenames</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span> <span class="n">alignment</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="n">CCDData</span><span class="p">]:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Aligns the given images in preparation for later stacking.</span>
+
+<span class="sd">        :param filenames: names of the files that should be aligned</span>
+<span class="sd">        :type filenames: list[str]</span>
+<span class="sd">        :param alignment: type of alignment to use. Valid are &#39;none&#39;, &#39;star1&#39;, &#39;star2&#39; and &#39;wcs&#39;. &#39;none&#39; does not align the images, &#39;star1&#39; uses the astroalign&#39; library to align the images, &#39;star2&#39; shows the first images and the user has to select th position of one star that should be used for alignment, &#39;wcs&#39; uses the WCS information from the header to align the images.</span>
+<span class="sd">        :type alignment: str</span>
+<span class="sd">        :raises ValueError: if the provided alignment method is invalid</span>
+<span class="sd">        :return: aligned images as CCDData objects</span>
+<span class="sd">        :rtype: list[CCDData]</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">match</span> <span class="n">alignment</span><span class="p">:</span>
+            <span class="k">case</span> <span class="s1">&#39;none&#39;</span><span class="p">:</span>
+                <span class="n">aligned</span> <span class="o">=</span> <span class="n">filenames</span>
+                <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;No alignment will be used for combination.&quot;</span><span class="p">)</span>
+
+            <span class="k">case</span> <span class="s1">&#39;star1&#39;</span><span class="p">:</span>
+                <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;The frames will be aligned by the &#39;astroalign&#39; library.&quot;</span><span class="p">)</span>
+                <span class="n">aligned</span> <span class="o">=</span> <span class="bp">cls</span><span class="o">.</span><span class="n">align_astroalign</span><span class="p">(</span><span class="n">filenames</span><span class="p">)</span>
+
+            <span class="k">case</span> <span class="s1">&#39;star2&#39;</span><span class="p">:</span>
+                <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;The frames will be aligned with one reference star selected by the user.&quot;</span><span class="p">)</span>
+                <span class="n">aligned</span> <span class="o">=</span> <span class="bp">cls</span><span class="o">.</span><span class="n">align_simple</span><span class="p">(</span><span class="n">filenames</span><span class="p">)</span>
+
+            <span class="k">case</span> <span class="s1">&#39;wcs&#39;</span><span class="p">:</span>
+                <span class="n">aligned</span> <span class="o">=</span> <span class="bp">cls</span><span class="o">.</span><span class="n">align_wcs</span><span class="p">(</span><span class="n">filenames</span><span class="p">)</span>
+                <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;The frames will be aligned according to their WCS information from the headers.&quot;</span><span class="p">)</span>
+
+            <span class="k">case</span><span class="w"> </span><span class="k">_</span><span class="p">:</span>
+                <span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Invalid alignemntmethod was given. Valid are &#39;none&#39;, &#39;star1&#39;, &#39;star2&#39;, and &#39;wcs&#39; but &#39;</span><span class="si">{</span><span class="n">alignment</span><span class="si">}</span><span class="s2">&#39; was given.&quot;</span><span class="p">)</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Invalid alignement method! Valid values are &#39;none&#39;, &#39;star1&#39;, &#39;star2&#39; and &#39;wcs&#39; but &#39;</span><span class="si">{</span><span class="n">alignment</span><span class="si">}</span><span class="s2">&#39; was given.&quot;</span><span class="p">)</span>
+
+        <span class="k">return</span> <span class="n">aligned</span></div>
+
+        
+<div class="viewcode-block" id="DataReduction.stack_lights">
+<a class="viewcode-back" href="../../data_processing.html#data_processing.data_reduction.DataReduction.stack_lights">[docs]</a>
+    <span class="k">def</span> <span class="nf">stack_lights</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">alignment</span><span class="p">:</span> <span class="nb">str</span><span class="o">=</span><span class="s1">&#39;none&#39;</span><span class="p">,</span> <span class="n">filelists</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]]</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">out_names</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Stacks the light frames and aligns them if desired.</span>
+
+<span class="sd">        :param alignment: alignment method to use, see DataReduction.align_images() for more detail, defaults to &#39;none&#39;</span>
+<span class="sd">        :type alignment: str, optional</span>
+<span class="sd">        :param filelists: a list that contains one list with filenames for every object that should be stacked seperatly, defaults to None</span>
+<span class="sd">        :type filelists: list[list[str]], optional</span>
+<span class="sd">        :param out_names: list with the names for the individual images. The resulting filename will be &#39;master_&lt;outname&gt;.fits, defaults to None</span>
+<span class="sd">        :type out_names: list[str], optional</span>
+<span class="sd">        :raises ValueError: if the number of entries in &#39;filelist&#39; and the number of entries in &#39;out_names&#39; does not match.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Started stacking of light frames.&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">ifc_reduced</span><span class="o">.</span><span class="n">refresh</span><span class="p">()</span>
+
+        <span class="k">if</span> <span class="n">filelists</span> <span class="o">==</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="c1"># create a set of the filters used for the light frames</span>
+            <span class="n">used_filters</span> <span class="o">=</span> <span class="nb">set</span><span class="p">(</span><span class="n">h</span><span class="p">[</span><span class="s1">&#39;filter&#39;</span><span class="p">]</span> <span class="k">for</span> <span class="n">h</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">ifc_reduced</span><span class="o">.</span><span class="n">headers</span><span class="p">(</span><span class="n">imagetyp</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">imagetypes</span><span class="p">[</span><span class="s1">&#39;light&#39;</span><span class="p">]))</span>
+
+            <span class="c1"># create a set of the observed objects</span>
+            <span class="n">observed_objects</span> <span class="o">=</span> <span class="nb">set</span><span class="p">(</span><span class="n">h</span><span class="p">[</span><span class="s1">&#39;object&#39;</span><span class="p">]</span> <span class="k">for</span> <span class="n">h</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">ifc_reduced</span><span class="o">.</span><span class="n">headers</span><span class="p">(</span><span class="n">imagetyp</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">imagetypes</span><span class="p">[</span><span class="s1">&#39;light&#39;</span><span class="p">]))</span>
+
+            <span class="k">for</span> <span class="n">obj</span> <span class="ow">in</span> <span class="n">observed_objects</span><span class="p">:</span>
+                <span class="k">for</span> <span class="n">filt</span> <span class="ow">in</span> <span class="n">used_filters</span><span class="p">:</span>
+                    <span class="n">filenames</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">ifc_reduced</span><span class="o">.</span><span class="n">files_filtered</span><span class="p">(</span><span class="n">imagetyp</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">imagetypes</span><span class="p">[</span><span class="s1">&#39;light&#39;</span><span class="p">],</span> <span class="nb">filter</span><span class="o">=</span><span class="n">filt</span><span class="p">,</span> <span class="nb">object</span><span class="o">=</span><span class="n">obj</span><span class="p">,</span> <span class="n">include_path</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+                    <span class="c1"># for some combinations there might not be any files</span>
+                    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">filenames</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+                        <span class="k">continue</span>
+
+                    <span class="c1"># aligning the images</span>
+                    <span class="n">to_combine</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">align_images</span><span class="p">(</span><span class="n">filenames</span><span class="p">,</span> <span class="n">alignment</span><span class="p">)</span>
+                    
+                    <span class="bp">self</span><span class="o">.</span><span class="n">__combine</span><span class="p">(</span><span class="n">to_combine</span><span class="p">,</span> <span class="s1">&#39;light&#39;</span><span class="p">,</span> <span class="n">obj</span><span class="p">,</span> <span class="n">filt</span><span class="p">,</span> <span class="n">filenames</span><span class="o">=</span><span class="n">filenames</span><span class="p">)</span>
+
+        <span class="k">else</span><span class="p">:</span>
+            <span class="c1"># check length of input</span>
+            <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">filelists</span><span class="p">)</span> <span class="o">==</span> <span class="mi">1</span> <span class="ow">and</span> <span class="nb">type</span><span class="p">(</span><span class="n">out_names</span><span class="p">)</span> <span class="o">==</span> <span class="nb">str</span><span class="p">:</span>
+                <span class="n">to_combine</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">align_images</span><span class="p">(</span><span class="n">filelists</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">alignment</span><span class="p">)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">__combine</span><span class="p">(</span><span class="n">to_combine</span><span class="p">,</span> <span class="s1">&#39;light&#39;</span><span class="p">,</span> <span class="n">out_names</span><span class="p">,</span> <span class="n">filenames</span><span class="o">=</span><span class="n">filelists</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+            <span class="k">elif</span> <span class="nb">len</span><span class="p">(</span><span class="n">filelists</span><span class="p">)</span> <span class="o">==</span> <span class="nb">len</span><span class="p">(</span><span class="n">out_names</span><span class="p">):</span>
+                <span class="k">for</span> <span class="n">files</span><span class="p">,</span> <span class="n">name</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">filelists</span><span class="p">,</span> <span class="n">out_names</span><span class="p">):</span>
+                    <span class="n">to_combine</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">align_images</span><span class="p">(</span><span class="n">files</span><span class="p">,</span> <span class="n">alignment</span><span class="p">)</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">__combine</span><span class="p">(</span><span class="n">to_combine</span><span class="p">,</span> <span class="s1">&#39;light&#39;</span><span class="p">,</span> <span class="n">name</span><span class="p">,</span> <span class="n">filenames</span><span class="o">=</span><span class="n">files</span><span class="p">)</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;The number of input filelists and output filenames does not match. You provided </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">filelists</span><span class="p">)</span><span class="si">}</span><span class="s2"> filelists and </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">out_names</span><span class="p">)</span><span class="si">}</span><span class="s2"> output filenames.&quot;</span><span class="p">)</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;The provided filnames does not match the provided number of output filenames. You provided </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">filelists</span><span class="p">)</span><span class="si">}</span><span class="s2"> filelists and </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">out_names</span><span class="p">)</span><span class="si">}</span><span class="s2">.&quot;</span><span class="p">)</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Finished stacking light frames.</span><span class="se">\n</span><span class="s2">&quot;</span><span class="p">)</span></div>
+
+
+    <span class="nd">@property</span>
+    <span class="nd">@lru_cache</span>
+    <span class="k">def</span> <span class="nf">readnoise</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">mean</span><span class="p">([</span><span class="n">np</span><span class="o">.</span><span class="n">std</span><span class="p">(</span><span class="n">bias</span><span class="p">)</span> <span class="k">for</span> <span class="n">bias</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">ifc_raw</span><span class="o">.</span><span class="n">data</span><span class="p">(</span><span class="n">imagetyp</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">imagetypes</span><span class="p">[</span><span class="s1">&#39;bias&#39;</span><span class="p">])])</span>
+    
+    <span class="nd">@property</span>
+    <span class="nd">@lru_cache</span>
+    <span class="k">def</span> <span class="nf">gain_estimate</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Started gain estimation.&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">master_frames</span><span class="p">[</span><span class="s1">&#39;bias&#39;</span><span class="p">]</span> <span class="o">==</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">reduce_bias</span><span class="p">()</span>
+        
+        <span class="n">gains</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="n">flat1</span><span class="p">,</span> <span class="n">flat2</span> <span class="ow">in</span> <span class="n">combinations</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">ifc_raw</span><span class="o">.</span><span class="n">data</span><span class="p">(</span><span class="n">imagetyp</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">imagetypes</span><span class="p">[</span><span class="s1">&#39;flat&#39;</span><span class="p">]),</span> <span class="mi">2</span><span class="p">):</span>
+            <span class="n">diff</span> <span class="o">=</span> <span class="n">flat1</span> <span class="o">-</span> <span class="n">flat2</span>
+            <span class="n">xcenter</span><span class="p">,</span> <span class="n">ycenter</span> <span class="o">=</span> <span class="p">[</span><span class="n">x</span><span class="o">//</span><span class="mi">4</span> <span class="k">for</span> <span class="n">x</span> <span class="ow">in</span> <span class="n">flat1</span><span class="o">.</span><span class="n">shape</span><span class="p">]</span>
+            <span class="c1"># std from central 100x100 pixels</span>
+            <span class="n">variance</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">std</span><span class="p">(</span><span class="n">diff</span><span class="p">[</span><span class="n">xcenter</span><span class="p">:</span><span class="mi">3</span><span class="o">*</span><span class="n">xcenter</span><span class="p">,</span> <span class="n">ycenter</span><span class="p">:</span><span class="mi">3</span><span class="o">*</span><span class="n">ycenter</span><span class="p">])</span><span class="o">**</span><span class="mi">2</span> <span class="o">/</span> <span class="mi">2</span>
+            <span class="c1"># subtract bias from both frames</span>
+            <span class="n">corrected1</span> <span class="o">=</span> <span class="n">flat1</span> <span class="o">-</span> <span class="bp">self</span><span class="o">.</span><span class="n">master_frames</span><span class="p">[</span><span class="s1">&#39;bias&#39;</span><span class="p">]</span>
+            <span class="n">corrected2</span> <span class="o">=</span> <span class="n">flat2</span> <span class="o">-</span> <span class="bp">self</span><span class="o">.</span><span class="n">master_frames</span><span class="p">[</span><span class="s1">&#39;bias&#39;</span><span class="p">]</span>
+            <span class="c1"># mean from central 100x100 pixels</span>
+            <span class="n">mean1</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">corrected1</span><span class="p">[</span><span class="n">xcenter</span><span class="p">:</span><span class="mi">3</span><span class="o">*</span><span class="n">xcenter</span><span class="p">,</span> <span class="n">ycenter</span><span class="p">:</span><span class="mi">3</span><span class="o">*</span><span class="n">ycenter</span><span class="p">])</span>
+            <span class="n">mean2</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">corrected2</span><span class="p">[</span><span class="n">xcenter</span><span class="p">:</span><span class="mi">3</span><span class="o">*</span><span class="n">xcenter</span><span class="p">,</span> <span class="n">ycenter</span><span class="p">:</span><span class="mi">3</span><span class="o">*</span><span class="n">ycenter</span><span class="p">])</span>
+            <span class="c1"># i actually don&#39;t know exactly why this is the gain now \_(°_°)_/</span>
+            <span class="c1"># https://www.photometrics.com/learn/imaging-topics/gain</span>
+            <span class="n">gains</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">mean1</span><span class="o">/</span><span class="n">variance</span><span class="p">)</span>
+            <span class="n">gains</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">mean2</span><span class="o">/</span><span class="n">variance</span><span class="p">)</span>
+        <span class="n">gain</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">gains</span><span class="p">)</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Estimated the gain of the data to: </span><span class="si">{</span><span class="n">gain</span><span class="si">}</span><span class="s2"> e/ADU&quot;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">gain</span>
+
+<div class="viewcode-block" id="DataReduction.cosmic_correct">
+<a class="viewcode-back" href="../../data_processing.html#data_processing.data_reduction.DataReduction.cosmic_correct">[docs]</a>
+    <span class="k">def</span> <span class="nf">cosmic_correct</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">gain</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">niter</span><span class="o">=</span><span class="mi">4</span><span class="p">,</span> <span class="n">readnoise</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">save_cosmics</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">fname</span><span class="o">=</span><span class="s1">&#39;.fits&#39;</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Removes cosmics from the image data.</span>
+
+<span class="sd">        :param data: data to remove cosmics on. If &#39;None&#39; every registerd light will be corrected and saved as a new file, defaults to None</span>
+<span class="sd">        :type data: CCDData, optional</span>
+<span class="sd">        :param gain: value of the gain of the data. If None than the gain will be read from the header. If there is no entry for &#39;EGAIN&#39; the gain will be estimated using the registered flat frames.</span>
+<span class="sd">        :type gain: float, optional</span>
+<span class="sd">        :param niter: number of iterations to perform the L.A. cosmic algorithm, defaults to 4</span>
+<span class="sd">        :type niter: int, optional</span>
+<span class="sd">        :param readnoise: Value for the readnoise, if not given it will be calculated from the registered bias frames, defaults to None</span>
+<span class="sd">        :type readnoise: float, optional</span>
+<span class="sd">        :param save_cosmics: Whether or not the detected cosmics sould be saved as an additional image, defaults to True</span>
+<span class="sd">        :type save_cosmics: bool, optional</span>
+<span class="sd">        :param fname: name of the image file to save the cosmic corrected image, defaults to &#39;.fits&#39;</span>
+<span class="sd">        :type fname: str, optional</span>
+<span class="sd">        :raises ValueError: if &#39;data&#39; is neither None nor a CCDData object.</span>
+<span class="sd">        :return: None if &#39;data&#39; is None, otherwise the data without the cosmics</span>
+<span class="sd">        :rtype: CCDData</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="n">readnoise</span><span class="o">==</span><span class="kc">None</span><span class="p">:</span>
+            <span class="n">readnoise</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">readnoise</span>
+
+        <span class="k">if</span> <span class="n">data</span><span class="o">==</span><span class="kc">None</span><span class="p">:</span>
+            <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Started cosmic correction&quot;</span><span class="p">)</span>
+            <span class="k">def</span> <span class="nf">correct</span><span class="p">(</span><span class="n">hdu</span><span class="p">,</span> <span class="n">fname</span><span class="p">,</span> <span class="n">gain</span><span class="p">,</span> <span class="n">save_cosmics</span><span class="p">):</span>
+                <span class="k">if</span> <span class="n">gain</span> <span class="o">==</span> <span class="kc">None</span><span class="p">:</span>
+                    <span class="k">try</span><span class="p">:</span>
+                        <span class="n">gain</span> <span class="o">=</span> <span class="n">hdu</span><span class="o">.</span><span class="n">header</span><span class="p">[</span><span class="s1">&#39;egain&#39;</span><span class="p">]</span>
+                        <span class="c1"># not sure if this statement is necessarily true</span>
+                        <span class="n">gain</span> <span class="o">=</span> <span class="n">gain</span> <span class="k">if</span> <span class="n">gain</span> <span class="o">&gt;=</span> <span class="mi">1</span> <span class="k">else</span> <span class="mi">1</span><span class="o">/</span><span class="n">gain</span>
+                    <span class="k">except</span> <span class="ne">KeyError</span><span class="p">:</span>
+                        <span class="n">gain</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">gain_estimate</span>
+                <span class="k">else</span><span class="p">:</span>
+                    <span class="n">gain</span> <span class="o">=</span> <span class="mf">1.</span>
+                <span class="c1"># determine the saturation level</span>
+                <span class="n">satlevel</span> <span class="o">=</span> <span class="mi">2</span><span class="o">**</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">abs</span><span class="p">(</span><span class="n">hdu</span><span class="o">.</span><span class="n">header</span><span class="p">[</span><span class="s1">&#39;bitpix&#39;</span><span class="p">]</span><span class="o">/</span><span class="mi">2</span><span class="p">))</span> <span class="o">-</span> <span class="mi">1</span>
+
+                <span class="n">hdu</span><span class="o">.</span><span class="n">data</span><span class="p">,</span> <span class="n">cosmics</span> <span class="o">=</span> <span class="n">cosmicray_lacosmic</span><span class="p">(</span><span class="n">hdu</span><span class="o">.</span><span class="n">data</span><span class="p">,</span> <span class="n">sigclip</span><span class="o">=</span><span class="mf">4.5</span><span class="p">,</span> <span class="n">sigfrac</span><span class="o">=</span><span class="mf">0.3</span><span class="p">,</span> <span class="n">objlim</span><span class="o">=</span><span class="mf">5.0</span><span class="p">,</span>
+                                                        <span class="n">gain</span><span class="o">=</span><span class="n">gain</span><span class="p">,</span> <span class="n">readnoise</span><span class="o">=</span><span class="n">readnoise</span><span class="p">,</span> <span class="n">satlevel</span><span class="o">=</span><span class="n">satlevel</span><span class="p">,</span>
+                                                        <span class="n">niter</span><span class="o">=</span><span class="n">niter</span><span class="p">,</span> <span class="n">cleantype</span><span class="o">=</span><span class="s1">&#39;meanmask&#39;</span><span class="p">,</span> <span class="n">fsmode</span><span class="o">=</span><span class="s1">&#39;median&#39;</span><span class="p">,</span>
+                                                        <span class="n">gain_apply</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+                <span class="n">hdu</span><span class="o">.</span><span class="n">header</span><span class="p">[</span><span class="s1">&#39;cosmics&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="s1">&#39;corrected&#39;</span>
+                <span class="k">if</span> <span class="n">save_cosmics</span><span class="p">:</span>
+                    <span class="n">fits</span><span class="o">.</span><span class="n">HDUList</span><span class="p">([</span><span class="n">fits</span><span class="o">.</span><span class="n">PrimaryHDU</span><span class="p">(</span><span class="n">data</span><span class="o">=</span><span class="n">cosmics</span><span class="o">*</span><span class="mi">1</span><span class="p">)])</span><span class="o">.</span><span class="n">writeto</span><span class="p">(</span><span class="n">Path</span><span class="p">(</span><span class="s1">&#39;.&#39;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">reduced_path</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;cosmics_</span><span class="si">{</span><span class="n">fname</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">),</span> <span class="n">overwrite</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+                <span class="n">hdu</span><span class="o">.</span><span class="n">writeto</span><span class="p">(</span><span class="n">Path</span><span class="p">(</span><span class="s1">&#39;.&#39;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">reduced_path</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;coscorr_</span><span class="si">{</span><span class="n">fname</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">),</span> <span class="n">overwrite</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+            <span class="k">with</span> <span class="n">ThreadPoolExecutor</span><span class="p">()</span> <span class="k">as</span> <span class="n">executer</span><span class="p">:</span>
+                <span class="n">executer</span><span class="o">.</span><span class="n">map</span><span class="p">(</span><span class="k">lambda</span> <span class="n">args</span><span class="p">:</span> <span class="n">correct</span><span class="p">(</span><span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="n">gain</span><span class="p">,</span> <span class="n">save_cosmics</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">ifc_raw</span><span class="o">.</span><span class="n">hdus</span><span class="p">(</span><span class="n">imagetyp</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">imagetypes</span><span class="p">[</span><span class="s1">&#39;light&#39;</span><span class="p">],</span> <span class="n">return_fname</span><span class="o">=</span><span class="kc">True</span><span class="p">))</span>
+            <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Finished cosmic correction&quot;</span><span class="p">)</span>
+
+        <span class="k">elif</span> <span class="nb">type</span><span class="p">(</span><span class="n">data</span><span class="p">)</span><span class="o">==</span><span class="n">CCDData</span><span class="p">:</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="n">gain</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">header</span><span class="p">[</span><span class="s1">&#39;egain&#39;</span><span class="p">]</span>
+                <span class="n">gain</span> <span class="o">=</span> <span class="n">gain</span> <span class="k">if</span> <span class="n">gain</span> <span class="o">&gt;=</span> <span class="mi">1</span> <span class="k">else</span> <span class="mi">1</span><span class="o">/</span><span class="n">gain</span>
+            <span class="k">except</span> <span class="ne">KeyError</span><span class="p">:</span>
+                <span class="n">gain</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">gain_estimate</span>
+
+            <span class="n">satlevel</span> <span class="o">=</span> <span class="mi">2</span><span class="o">**</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">abs</span><span class="p">(</span><span class="n">data</span><span class="o">.</span><span class="n">header</span><span class="p">[</span><span class="s1">&#39;bitpix&#39;</span><span class="p">]</span><span class="o">/</span><span class="mi">2</span><span class="p">))</span> <span class="o">-</span> <span class="mi">1</span>
+
+            <span class="n">data</span><span class="o">.</span><span class="n">data</span><span class="p">,</span> <span class="n">cosmics</span> <span class="o">=</span> <span class="n">cosmicray_lacosmic</span><span class="p">(</span><span class="n">data</span><span class="o">.</span><span class="n">data</span><span class="p">,</span> <span class="n">sigclip</span><span class="o">=</span><span class="mf">4.5</span><span class="p">,</span> <span class="n">sigfrac</span><span class="o">=</span><span class="mf">0.3</span><span class="p">,</span> <span class="n">objlim</span><span class="o">=</span><span class="mf">5.0</span><span class="p">,</span>
+                                                    <span class="n">gain</span><span class="o">=</span><span class="n">gain</span><span class="p">,</span> <span class="n">readnoise</span><span class="o">=</span><span class="n">readnoise</span><span class="p">,</span> <span class="n">satlevel</span><span class="o">=</span><span class="n">satlevel</span><span class="p">,</span>
+                                                    <span class="n">niter</span><span class="o">=</span><span class="n">niter</span><span class="p">,</span> <span class="n">cleantype</span><span class="o">=</span><span class="s1">&#39;meanmask&#39;</span><span class="p">,</span> <span class="n">fsmode</span><span class="o">=</span><span class="s1">&#39;median&#39;</span><span class="p">,</span>
+                                                    <span class="n">gain_apply</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+            
+            <span class="n">data</span><span class="o">.</span><span class="n">header</span><span class="p">[</span><span class="s1">&#39;cosmics&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="s1">&#39;corrected&#39;</span>
+            <span class="k">if</span> <span class="n">save_cosmics</span><span class="p">:</span>
+                <span class="n">fits</span><span class="o">.</span><span class="n">HDUList</span><span class="p">([</span><span class="n">fits</span><span class="o">.</span><span class="n">PrimaryHDU</span><span class="p">(</span><span class="n">data</span><span class="o">=</span><span class="n">cosmics</span><span class="o">*</span><span class="mi">1</span><span class="p">)])</span><span class="o">.</span><span class="n">writeto</span><span class="p">(</span><span class="n">Path</span><span class="p">(</span><span class="s1">&#39;.&#39;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">reduced_path</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;cosmics_</span><span class="si">{</span><span class="n">fname</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">),</span> <span class="n">overwrite</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+            
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">message</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;You provided an invalid type for &#39;data&#39; to perform cosmic correction on. You provided &#39;</span><span class="si">{</span><span class="nb">type</span><span class="p">(</span><span class="n">data</span><span class="p">)</span><span class="si">}</span><span class="s2">&#39;.&quot;</span>
+            <span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="n">message</span><span class="p">)</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="n">message</span><span class="p">)</span>
+
+        <span class="k">return</span> <span class="n">data</span></div>
+</div>
+
+</pre></div>
+
+           </div>
+          </div>
+          <footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2024, Jeremia Neuhold.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>
