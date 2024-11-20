@@ -188,10 +188,11 @@ class DataReduction():
         # save the image
         master.write(self.reduced_path / file_name, overwrite=True)
 
+        nt = '\n\t'
         if type(to_combine[0]) == str:
-            logger.debug(f"Combined {len(to_combine)} frames to one master {frame} frame.\nMaster filename:\t{file_name}\nObject:\t{obj}\nFilter:\t{filt}\nExposure:\t{exposure}\nThe used frames are:\n\t{'\n\t'.join(to_combine)}")
+            logger.debug(f"Combined {len(to_combine)} frames to one master {frame} frame.\nMaster filename:\t{file_name}\nObject:\t{obj}\nFilter:\t{filt}\nExposure:\t{exposure}\nThe used frames are:\n\t{nt.join(to_combine)}")
         elif filenames != None:
-            logger.debug(f"Combined {len(to_combine)} frames to one master {frame} frame.\nMaster filename:\t{file_name}\nObject:\t{obj}\nFilter:\t{filt}\nExposure:\t{exposure}\nThe used frames are:\n\t{'\n\t'.join(filenames)}")
+            logger.debug(f"Combined {len(to_combine)} frames to one master {frame} frame.\nMaster filename:\t{file_name}\nObject:\t{obj}\nFilter:\t{filt}\nExposure:\t{exposure}\nThe used frames are:\n\t{nt.join(filenames)}")
         else:
             logger.debug(f"Combined {len(to_combine)} frames to one master {frame} frame.\nMaster filename:\t{file_name}\nObject:\t{obj}\nFilter:\t{filt}\nExposure:\t{exposure}")
         return master
@@ -473,7 +474,8 @@ class DataReduction():
             logger.info("One or more master bias were detected.")
             master_bias: list[str] = self.ifc_reduced.files_filtered(imagetyp=self.imagetypes['bias'], combined=True)
             if len(master_bias) > 1:
-                logger.error(f"More than one master bias are detected. Make sure that at most one frame is available. The found files are {'\n'.join(master_bias)}")
+                n = '\n'
+                logger.error(f"More than one master bias are detected. Make sure that at most one frame is available. The found files are {n.join(master_bias)}")
                 raise RuntimeError(f"More than one master bias are detected. Make sure that at most one frame is available. The found files are {master_bias}")
             else:
                 with fits.open(self.reduced_path / master_bias[0]) as file:
@@ -545,7 +547,8 @@ class DataReduction():
                 with fits.open(dark) as file:
                     exp_time = int(file[0].header['exptime'])
                     if exp_time in exptimes:
-                        logger.error(f"More than one master dark for the same exposure time are detected. Make sure that at most one file for each exposure time is available. The found files are {'\n'.join(master_darks)}")
+                        n = '\n'
+                        logger.error(f"More than one master dark for the same exposure time are detected. Make sure that at most one file for each exposure time is available. The found files are {n.join(master_darks)}")
                         raise RuntimeError(f"More than one master dark for the same exposure time are detected. Make sure that at most one file for each exposure time is available. The found files are {master_darks}")
                     else:
                         self.master_frames['dark'] = {exp_time:CCDData(file[0].data, unit='adu')}
@@ -626,7 +629,8 @@ class DataReduction():
                 with fits.open(flat) as file:
                     used_filter = file[0].header['filter']
                     if used_filter in filters:
-                        logger.error(f"More than one master flat for the same filter are detected. Make shure that at most one file for each filter is available. The found files are {'\n'.join(master_flats)}")
+                        n = '\n'
+                        logger.error(f"More than one master flat for the same filter are detected. Make shure that at most one file for each filter is available. The found files are {n.join(master_flats)}")
                         raise RuntimeError(f"More than one master flat for the same filter are detected. Make shure that at most one file for each filter is available. The found files are {master_flats}")
                     else:
                         self.master_frames['flat'] = {used_filter:CCDData(file[0].data, unit='adu')}
@@ -788,7 +792,7 @@ class DataReduction():
         logger.debug(f"Estimated the gain of the data to: {gain} e/ADU")
         return gain
 
-    def cosmic_correct(self, data=None, gain=None, niter=4, readnoise=None, save_cosmics=True, fname='.fits'):
+    def cosmic_correct(self, data=None, gain=None, niter=4, readnoise=None, save_cosmics=False, fname='.fits'):
         """Removes cosmics from the image data.
 
         :param data: data to remove cosmics on. If 'None' every registerd light will be corrected and saved as a new file, defaults to None
