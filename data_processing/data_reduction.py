@@ -803,7 +803,7 @@ class DataReduction():
         :type niter: int, optional
         :param readnoise: Value for the readnoise, if not given it will be calculated from the registered bias frames, defaults to None
         :type readnoise: float, optional
-        :param save_cosmics: Whether or not the detected cosmics sould be saved as an additional image, defaults to True
+        :param save_cosmics: Whether or not the detected cosmics sould be saved as an additional image, defaults to False
         :type save_cosmics: bool, optional
         :param fname: name of the image file to save the cosmic corrected image, defaults to '.fits'
         :type fname: str, optional
