@@ -89,17 +89,25 @@
 </section>
 <section id="module-data_processing.data_reduction">
 <span id="data-processing-data-reduction-module"></span><h2>data_processing.data_reduction module<a class="headerlink" href="#module-data_processing.data_reduction" title="Link to this heading"></a></h2>
+<p>Class for performin data reduction. Optimized to use it with vlt or LFOA data</p>
 <dl class="py class">
 <dt class="sig sig-object py" id="data_processing.data_reduction.DataReduction">
 <em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">data_processing.data_reduction.</span></span><span class="sig-name descname"><span class="pre">DataReduction</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">foldername_data</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">foldername_reduced</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">'reduced_data'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">bias</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dark</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">flat</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">light</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/data_processing/data_reduction.html#DataReduction"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#data_processing.data_reduction.DataReduction" title="Link to this definition"></a></dt>
 <dd><p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">object</span></code></p>
-<p>Basic class for Data Reduction. For this class to work properly the used .fits files need the following keywords in the header: ‘EXPTIME’, ‘FILTER’, ‘OBJECT’. Optionally it can also contain wcs informations if an alignment of those is desired. If not provided the alignemt can also be done by matching stars in the image.</p>
-<p>If the status informations should be tracked a logger with the name ‘data_reduction’ should be defined. If this logger is not defined in advance, a basic console logger will be used.</p>
+<p>Basic class for Data Reduction.
+For this class to work properly the used .fits files need the following keywords in the header:
+‘EXPTIME’, ‘FILTER’, ‘OBJECT’.
+Optionally it can also contain wcs informations if an alignment of those is desired.
+If not provided the alignemt can also be done by matching stars in the image.
+If the status informations should be tracked a logger with the name ‘data_reduction’
+should be defined.
+If this logger is not defined in advance, a basic console logger will be used.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
 <dd class="field-odd"><ul class="simple">
 <li><p><strong>foldername_data</strong> (<em>str</em>) – Name of the folder with the raw data that should be processed.</p></li>
-<li><p><strong>foldername_reduced</strong> (<em>str</em><em>, </em><em>optional</em>) – Name of the folder where the reduced data should be stored. If it does not exist, this folder will be created. Defaults to “reduced_data”</p></li>
+<li><p><strong>foldername_reduced</strong> (<em>str</em><em>, </em><em>optional</em>) – Name of the folder where the reduced data should be stored.
+If it does not exist, this folder will be created. Defaults to “reduced_data”</p></li>
 <li><p><strong>bias</strong> (<em>str</em><em>, </em><em>optional</em>) – Keyword in the headers for bias frames, defaults to ‘’</p></li>
 <li><p><strong>dark</strong> (<em>str</em><em>, </em><em>optional</em>) – Keyword in the headers for dark frames, defaults to ‘’</p></li>
 <li><p><strong>flat</strong> (<em>str</em><em>, </em><em>optional</em>) – Keyword in the headers for flat frames, defaults to ‘’</p></li>
@@ -132,7 +140,11 @@
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
 <dd class="field-odd"><ul class="simple">
 <li><p><strong>filenames</strong> (<em>list</em><em>[</em><em>str</em><em>]</em>) – names of the files that should be aligned</p></li>
-<li><p><strong>alignment</strong> (<em>str</em>) – type of alignment to use. Valid are ‘none’, ‘star1’, ‘star2’ and ‘wcs’. ‘none’ does not align the images, ‘star1’ uses the astroalign’ library to align the images, ‘star2’ shows the first images and the user has to select th position of one star that should be used for alignment, ‘wcs’ uses the WCS information from the header to align the images.</p></li>
+<li><p><strong>alignment</strong> (<em>str</em>) – type of alignment to use. Valid are ‘none’, ‘astroalign’, ‘singlestar’ and ‘wcs’.
+‘none’ does not align the images, ‘astroalign’ uses a dedicated library to align the images,
+‘singlestar’ shows the first images and the user has to select the position of one star
+that should be used for alignment,
+‘wcs’ uses the WCS information from the header to align the images.</p></li>
 </ul>
 </dd>
 <dt class="field-even">Raises<span class="colon">:</span></dt>
@@ -150,7 +162,8 @@
 <dl class="py method">
 <dt class="sig sig-object py" id="data_processing.data_reduction.DataReduction.align_simple">
 <em class="property"><span class="pre">static</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">align_simple</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">to_combine</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">CCDData</span><span class="p"><span class="pre">]</span></span></span></span><a class="reference internal" href="_modules/data_processing/data_reduction.html#DataReduction.align_simple"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#data_processing.data_reduction.DataReduction.align_simple" title="Link to this definition"></a></dt>
-<dd><p>Aligns the given images using an input from the user to detect a star that will be aligned. Since it only uses one star no rotational alignment is possible.</p>
+<dd><p>Aligns the given images using an input from the user to detect a star for alignment.
+Since it only uses one star no rotational alignment is possible.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
 <dd class="field-odd"><p><strong>to_combine</strong> (<em>list</em><em>[</em><em>str</em><em>]</em>) – list of filenames that should be aligned</p>
@@ -208,7 +221,8 @@
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
 <dd class="field-odd"><ul class="simple">
-<li><p><strong>frametype</strong> (<em>str</em>) – Specifies which frametype should be checked. Valid are ‘bias’, ‘dark’, ‘flat’ and ‘light’</p></li>
+<li><p><strong>frametype</strong> (<em>str</em>) – Specifies which frametype should be checked.
+Valid are ‘bias’, ‘dark’, ‘flat’ and ‘light’</p></li>
 <li><p><strong>master</strong> (<em>str</em><em>, </em><em>optional</em>) – name of a specific master frame, defaults to ‘’</p></li>
 </ul>
 </dd>
@@ -231,11 +245,16 @@
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
 <dd class="field-odd"><ul class="simple">
-<li><p><strong>data</strong> (<em>CCDData</em><em>, </em><em>optional</em>) – data to remove cosmics on. If ‘None’ every registerd light will be corrected and saved as a new file, defaults to None</p></li>
-<li><p><strong>gain</strong> (<em>float</em><em>, </em><em>optional</em>) – value of the gain of the data. If None than the gain will be read from the header. If there is no entry for ‘EGAIN’ the gain will be estimated using the registered flat frames.</p></li>
+<li><p><strong>data</strong> (<em>CCDData</em><em>, </em><em>optional</em>) – data to remove cosmics on.
+If ‘None’ every registerd light will be corrected and saved as a new file,
+defaults to None</p></li>
+<li><p><strong>gain</strong> (<em>float</em><em>, </em><em>optional</em>) – value of the gain of the data. If None than the gain will be read from the header.
+If there is no entry for ‘EGAIN’ the gain will be estimated using the registered flat frames.</p></li>
 <li><p><strong>niter</strong> (<em>int</em><em>, </em><em>optional</em>) – number of iterations to perform the L.A. cosmic algorithm, defaults to 4</p></li>
-<li><p><strong>readnoise</strong> (<em>float</em><em>, </em><em>optional</em>) – Value for the readnoise, if not given it will be calculated from the registered bias frames, defaults to None</p></li>
-<li><p><strong>save_cosmics</strong> (<em>bool</em><em>, </em><em>optional</em>) – Whether or not the detected cosmics sould be saved as an additional image, defaults to False</p></li>
+<li><p><strong>readnoise</strong> (<em>float</em><em>, </em><em>optional</em>) – Value for the readnoise, if not given it will be calculated from the registered bias frames,
+defaults to None</p></li>
+<li><p><strong>save_cosmics</strong> (<em>bool</em><em>, </em><em>optional</em>) – Whether or not the detected cosmics sould be saved as an additional image,
+defaults to False</p></li>
 <li><p><strong>fname</strong> (<em>str</em><em>, </em><em>optional</em>) – name of the image file to save the cosmic corrected image, defaults to ‘.fits’</p></li>
 </ul>
 </dd>
@@ -254,22 +273,47 @@
 <dl class="py property">
 <dt class="sig sig-object py" id="data_processing.data_reduction.DataReduction.gain_estimate">
 <em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">gain_estimate</span></span><a class="headerlink" href="#data_processing.data_reduction.DataReduction.gain_estimate" title="Link to this definition"></a></dt>
-<dd></dd></dl>
+<dd><p>calculates an estimate for the gain using the flat frames.
+This is very inaccurate and should not be used if there is another way to get this value.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Returns<span class="colon">:</span></dt>
+<dd class="field-odd"><p>calculated estimate for the gain</p>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p>float</p>
+</dd>
+</dl>
+</dd></dl>
 
 <dl class="py property">
 <dt class="sig sig-object py" id="data_processing.data_reduction.DataReduction.readnoise">
 <em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">readnoise</span></span><a class="headerlink" href="#data_processing.data_reduction.DataReduction.readnoise" title="Link to this definition"></a></dt>
-<dd></dd></dl>
+<dd><p>calculates an estimate of the readoise based on the standard deviation of the bias frames.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Returns<span class="colon">:</span></dt>
+<dd class="field-odd"><p>estimate for the readnoise</p>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p>float</p>
+</dd>
+</dl>
+</dd></dl>
 
 <dl class="py method">
 <dt class="sig sig-object py" id="data_processing.data_reduction.DataReduction.reduce_bias">
 <span class="sig-name descname"><span class="pre">reduce_bias</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">force_new_master</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">keep_files</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">CCDData</span></span></span><a class="reference internal" href="_modules/data_processing/data_reduction.html#DataReduction.reduce_bias"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#data_processing.data_reduction.DataReduction.reduce_bias" title="Link to this definition"></a></dt>
-<dd><p>Calibrates the bias frames and stacks them to a master bias. If there is already a masterbias in the folder for the reduced data this one will be used instead of creating a new one.</p>
+<dd><p>Calibrates the bias frames and stacks them to a master bias.
+If there is already a masterbias in the folder for the reduced data this one will be used
+instead of creating a new one.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
 <dd class="field-odd"><ul class="simple">
-<li><p><strong>force_new_master</strong> (<em>bool</em><em>, </em><em>optional</em>) – True if a new master should be created even if there is already one, defaults to False</p></li>
-<li><p><strong>keep_files</strong> (<em>bool</em><em>, </em><em>optional</em>) – True if the individual file should be kept in the reduced folder, False if the files should be removed after stacking. The raw data will not be altered, only the files in the reduced path, defaults to False</p></li>
+<li><p><strong>force_new_master</strong> (<em>bool</em><em>, </em><em>optional</em>) – True if a new master shall be created even if there is already one,
+defaults to False</p></li>
+<li><p><strong>keep_files</strong> (<em>bool</em><em>, </em><em>optional</em>) – True if the individual file should be kept in the reduced folder,
+False if the files should be removed after stacking.
+The raw data will not be altered,
+only the files in the reduced path, defaults to False</p></li>
 </ul>
 </dd>
 <dt class="field-even">Raises<span class="colon">:</span></dt>
@@ -291,9 +335,14 @@
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
 <dd class="field-odd"><ul class="simple">
-<li><p><strong>force_new_master</strong> (<em>bool</em><em>, </em><em>optional</em>) – True if a new master should be created even if there is already one, defaults to False</p></li>
-<li><p><strong>keep_files</strong> (<em>bool</em><em>, </em><em>optional</em>) – True if the individual file should be kept in the reduced folder, False if the files should be removed after stacking. The raw data will not be altered, only the files in the reduced path, defaults to False</p></li>
-<li><p><strong>master_bias</strong> (<em>str</em><em> | </em><em>CCDData</em><em>, </em><em>optional</em>) – filename or CCDData object of the frame that should be used for bias subtraction, defaults to None</p></li>
+<li><p><strong>force_new_master</strong> (<em>bool</em><em>, </em><em>optional</em>) – True if a new master should be created even if there is already one,
+defaults to False</p></li>
+<li><p><strong>keep_files</strong> (<em>bool</em><em>, </em><em>optional</em>) – True if the individual file should be kept in the reduced folder,
+False if the files should be removed after stacking.
+The raw data will not be altered, only the files in the reduced path,
+defaults to False</p></li>
+<li><p><strong>master_bias</strong> (<em>str</em><em> | </em><em>CCDData</em><em>, </em><em>optional</em>) – filename or CCDData object of the frame that should be used as bias,
+defaults to None</p></li>
 </ul>
 </dd>
 <dt class="field-even">Raises<span class="colon">:</span></dt>
@@ -315,17 +364,23 @@
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
 <dd class="field-odd"><ul class="simple">
-<li><p><strong>force_new_master</strong> (<em>bool</em><em>, </em><em>optional</em>) – True if a new master should be created even if there is already one, defaults to False</p></li>
-<li><p><strong>keep_files</strong> (<em>bool</em><em>, </em><em>optional</em>) – True if the individual file should be kept in the reduced folder, False if the files should be removed after stacking. The raw data will not be altered, only the files in the reduced path, defaults to False</p></li>
-<li><p><strong>master_bias</strong> (<em>str</em><em> | </em><em>CCDData</em><em>, </em><em>optional</em>) – filename or CCDData object of the frame that should be used for bias subtraction, defaults to None</p></li>
-<li><p><strong>master_dark</strong> (<em>str</em><em> | </em><em>CCDData</em><em>, </em><em>optional</em>) – filename or CCDData object of the frame that should be used for dark subtraction, defaults to None</p></li>
+<li><p><strong>force_new_master</strong> (<em>bool</em><em>, </em><em>optional</em>) – True if a new master should be created even if there is already one,
+defaults to False</p></li>
+<li><p><strong>keep_files</strong> (<em>bool</em><em>, </em><em>optional</em>) – True if the individual file should be kept in the reduced folder,
+False if the files should be removed after stacking.
+The raw data will not be altered, only the files in the reduced path,
+defaults to False</p></li>
+<li><p><strong>master_bias</strong> (<em>str</em><em> | </em><em>CCDData</em><em>, </em><em>optional</em>) – filename or CCDData object of the frame that should be used for bias subtraction,
+defaults to None</p></li>
+<li><p><strong>master_dark</strong> (<em>str</em><em> | </em><em>CCDData</em><em>, </em><em>optional</em>) – filename or CCDData object of the frame that should be used for dark subtraction,
+defaults to None</p></li>
 </ul>
 </dd>
 <dt class="field-even">Raises<span class="colon">:</span></dt>
 <dd class="field-even"><p><strong>RuntimeError</strong> – if more than one master flat for the same filter is found</p>
 </dd>
 <dt class="field-odd">Returns<span class="colon">:</span></dt>
-<dd class="field-odd"><p>dict with the name of the filter as key and the CCDData objects of the stacked flat frame sas the values.</p>
+<dd class="field-odd"><p>dict of the form {filtername:flat data}.</p>
 </dd>
 <dt class="field-even">Return type<span class="colon">:</span></dt>
 <dd class="field-even"><p>dict[str, CCDData]</p>
@@ -335,15 +390,19 @@
 
 <dl class="py method">
 <dt class="sig sig-object py" id="data_processing.data_reduction.DataReduction.reduce_lights">
-<span class="sig-name descname"><span class="pre">reduce_lights</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">correct_cosmics</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">master_bias</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">CCDData</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">master_dark</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">CCDData</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">master_flat</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">CCDData</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="reference internal" href="_modules/data_processing/data_reduction.html#DataReduction.reduce_lights"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#data_processing.data_reduction.DataReduction.reduce_lights" title="Link to this definition"></a></dt>
-<dd><p>Corrects the light frames by subtracting bias and dark frames and dividing by the flat. This does NOT create a master frame.</p>
+<span class="sig-name descname"><span class="pre">reduce_lights</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">correct_cosmics</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">master_bias</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">CCDData</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">master_dark</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">CCDData</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">master_flat</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">CCDData</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="reference internal" href="_modules/data_processing/data_reduction.html#DataReduction.reduce_lights"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#data_processing.data_reduction.DataReduction.reduce_lights" title="Link to this definition"></a></dt>
+<dd><p>Corrects the light frames by subtracting bias and dark frames and dividing by the flat.
+This does NOT create a master frame.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
 <dd class="field-odd"><ul class="simple">
 <li><p><strong>correct_cosmics</strong> (<em>bool</em><em>, </em><em>optional</em>) – whether to correct cosmic rays, defaults to True</p></li>
-<li><p><strong>master_bias</strong> (<em>str</em><em> | </em><em>CCDData</em><em>, </em><em>optional</em>) – filename or CCDData object of the frame that should be used for bias subtraction, defaults to None</p></li>
-<li><p><strong>master_dark</strong> (<em>str</em><em> | </em><em>CCDData</em><em>, </em><em>optional</em>) – filename or CCDData object of the frame that should be used for dark subtraction, defaults to None</p></li>
-<li><p><strong>master_flat</strong> (<em>str</em><em> | </em><em>CCDData</em><em>, </em><em>optional</em>) – filename or CCDData object of the frame that should be used for flat division, defaults to None</p></li>
+<li><p><strong>master_bias</strong> (<em>str</em><em> | </em><em>CCDData</em><em>, </em><em>optional</em>) – filename or CCDData object of the frame that should be used for bias subtraction,
+defaults to None</p></li>
+<li><p><strong>master_dark</strong> (<em>str</em><em> | </em><em>CCDData</em><em>, </em><em>optional</em>) – filename or CCDData object of the frame that should be used for dark subtraction,
+defaults to None</p></li>
+<li><p><strong>master_flat</strong> (<em>str</em><em> | </em><em>CCDData</em><em>, </em><em>optional</em>) – filename or CCDData object of the frame that should be used for flat division,
+defaults to None</p></li>
 </ul>
 </dd>
 </dl>
@@ -357,12 +416,15 @@
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
 <dd class="field-odd"><ul class="simple">
 <li><p><strong>alignment</strong> (<em>str</em><em>, </em><em>optional</em>) – alignment method to use, see DataReduction.align_images() for more detail, defaults to ‘none’</p></li>
-<li><p><strong>filelists</strong> (<em>list</em><em>[</em><em>list</em><em>[</em><em>str</em><em>]</em><em>]</em><em>, </em><em>optional</em>) – a list that contains one list with filenames for every object that should be stacked seperatly, defaults to None</p></li>
-<li><p><strong>out_names</strong> (<em>list</em><em>[</em><em>str</em><em>]</em><em>, </em><em>optional</em>) – list with the names for the individual images. The resulting filename will be ‘master_&lt;outname&gt;.fits, defaults to None</p></li>
+<li><p><strong>filelists</strong> (<em>list</em><em>[</em><em>list</em><em>[</em><em>str</em><em>]</em><em>]</em><em>, </em><em>optional</em>) – list that contains one list with filenames for every object that should be stacked seperatly,
+defaults to None</p></li>
+<li><p><strong>out_names</strong> (<em>list</em><em>[</em><em>str</em><em>]</em><em>, </em><em>optional</em>) – list of the names for the individual images.
+The resulting filename will be ‘master_&lt;outname&gt;.fits,
+defaults to None</p></li>
 </ul>
 </dd>
 <dt class="field-even">Raises<span class="colon">:</span></dt>
-<dd class="field-even"><p><strong>ValueError</strong> – if the number of entries in ‘filelist’ and the number of entries in ‘out_names’ does not match.</p>
+<dd class="field-even"><p><strong>ValueError</strong> – if the number of items in ‘filelist’ and the number of items in ‘out_names’ does not match.</p>
 </dd>
 </dl>
 </dd></dl>
